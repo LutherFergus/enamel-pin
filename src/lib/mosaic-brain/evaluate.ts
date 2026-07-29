@@ -105,14 +105,21 @@ export function evaluateMosaicDesign(
   if (input.colorCount === 2) {
     notes.push("2 colors = strongest mosaic contrast and easiest yarn work.");
     directives.push(
-      "With 2 colors, maximize graphic silhouette impact and avoid mid-tone illusions.",
+      "STRICT 2-COLOR LOCK: only two solid colors may appear anywhere in the image. No third tint for belly, cheeks, flower centers, highlights, or outlines.",
+    );
+    directives.push(
+      "With 2 colors, use bold silhouette contrast (Color A vs Color B). Mid-tone accents are a failure.",
     );
   } else if (input.colorCount >= 4) {
     notes.push(
       "More colors add yarn changes — keep shapes fewer and larger so the chart stays clean.",
     );
     directives.push(
-      `Using ${input.colorCount} flat colors: assign each to large regions only. Do not use extra colors for tiny accents.`,
+      `Using ${input.colorCount} flat colors: assign each to large regions only. Do not use extra colors for tiny accents. Never exceed ${input.colorCount} colors.`,
+    );
+  } else {
+    directives.push(
+      `STRICT ${input.colorCount}-COLOR LOCK: use exactly ${input.colorCount} solid colors total across subject, border, and background — no extra tints.`,
     );
   }
 

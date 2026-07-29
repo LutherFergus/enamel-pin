@@ -20,10 +20,28 @@ export type PromptBuildInput = {
 };
 
 function colorInstruction(colorCount: ColorCount): string {
+  const hardCap = [
+    `HARD COLOR CAP: the finished image may use exactly ${colorCount} solid flat colors — no more.`,
+    "Count every region: subject, outlines, eyes, belly, cheeks, border, background, and ornaments.",
+    "Forbidden extras: tints, shades, mid-tones, highlights, lowlights, gray helpers, off-white accents, or a third 'almost the same' green/blue/etc.",
+    "If a shape needs separation, flip between the allowed colors or use negative space from those same colors — never invent another color.",
+  ].join(" ");
+
   if (colorCount === 2) {
-    return "Palette: exactly 2 flat solid colors total (pure white negative space allowed only if needed for clarity).";
+    return [
+      "Palette: EXACTLY 2 yarn colors for the entire canvas (Color A + Color B only).",
+      "Pick two high-contrast colors. Every pixel must be Color A or Color B.",
+      "Do not add white, cream, yellow-green, light fill, or any third accent unless that third tone is literally one of the two chosen colors.",
+      "Classic two-color graphic: dark silhouette shapes on a light field, or light shapes on a dark field — still only those two colors.",
+      hardCap,
+    ].join(" ");
   }
-  return `Palette: exactly ${colorCount} flat solid colors total. Choose a cohesive, high-contrast ${colorCount}-color palette.`;
+
+  return [
+    `Palette: EXACTLY ${colorCount} flat solid yarn colors for the entire canvas.`,
+    `Choose a cohesive high-contrast ${colorCount}-color set and use only those colors everywhere.`,
+    hardCap,
+  ].join(" ");
 }
 
 function detailInstruction(detailLevel: DetailLevel): string {
@@ -134,6 +152,7 @@ export function buildMosaicPrompt(input: PromptBuildInput): string {
     "No gradients, textures, grain, noise, shadows, glow, 3D, photorealism, blur, or watercolor.",
     "Do NOT make the image look like a mosaic, pixels, tiles, beads, cross-stitch, graphghan, Lego, embroidery chart, or 8-bit/16-bit pixel art.",
     "Keep shapes bold and easy to read at a glance. Prefer fewer larger forms over many small ones. Simple is usually better.",
+    "Color obedience is mandatory: never exceed the requested color count. Extra 'accent' colors are rejected.",
     ...evaluation.directives,
     colorInstruction(input.colorCount),
     detailInstruction(input.detailLevel),
