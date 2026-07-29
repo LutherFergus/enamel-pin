@@ -75,9 +75,10 @@ npx netlify dev
 1. Enter your xAI API key when prompted (or use **Change** in the header later).
 2. Type a short subject (e.g. `sleepy fox`) — you do not need a long prompt.
 3. Pick orientation + proportion, detail, background, border options, and color count.
-4. Optionally upload a photo to convert into a crisp vector motif.
-5. Click **Create design**, then **Download PNG**.
-6. Browse past designs in the on-device gallery (max 50; oldest drop off).
+4. Optional: click **Preview prompt** to inspect the full Imagine prompt (no API call).
+5. Optionally upload a photo to convert into a crisp vector motif.
+6. Click **Create design**, then **Download PNG**.
+7. Browse past designs in the on-device gallery (max 50; oldest drop off).
 
 ## Scripts
 

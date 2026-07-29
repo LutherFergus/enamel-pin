@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { evaluateMosaicDesign } from "@/lib/mosaic-brain";
 import { fileToResizedDataUrl } from "@/lib/gallery";
+import { buildMosaicPrompt } from "@/lib/prompt";
 import {
   BORDER_MODE_OPTIONS,
   COLOR_COUNT_OPTIONS,
@@ -97,6 +98,8 @@ export function CreatorForm({ busy, onGenerate }: CreatorFormProps) {
   const [photoName, setPhotoName] = useState<string | null>(null);
   const [photoDataUrl, setPhotoDataUrl] = useState<string | undefined>();
   const [localError, setLocalError] = useState<string | null>(null);
+  const [showPromptPreview, setShowPromptPreview] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     const allowed = PROPORTION_OPTIONS[orientation].map((item) => item.value);
@@ -129,6 +132,9 @@ export function CreatorForm({ busy, onGenerate }: CreatorFormProps) {
     }
   }
 
+  const resolvedCornerStyle =
+    borderMode === "corners" ? cornerStyle : DEFAULT_CORNER_STYLE;
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setLocalError(null);
@@ -144,8 +150,7 @@ export function CreatorForm({ busy, onGenerate }: CreatorFormProps) {
       aspectRatio,
       detailLevel,
       borderMode,
-      cornerStyle:
-        borderMode === "corners" ? cornerStyle : DEFAULT_CORNER_STYLE,
+      cornerStyle: resolvedCornerStyle,
       backgroundMode,
       imageDataUrl: photoDataUrl,
     });
@@ -157,11 +162,31 @@ export function CreatorForm({ busy, onGenerate }: CreatorFormProps) {
     aspectRatio,
     detailLevel,
     borderMode,
-    cornerStyle:
-      borderMode === "corners" ? cornerStyle : DEFAULT_CORNER_STYLE,
+    cornerStyle: resolvedCornerStyle,
     backgroundMode,
     hasReferenceImage: Boolean(photoDataUrl),
   });
+
+  const previewPrompt = buildMosaicPrompt({
+    userPrompt: prompt.trim() || "subject",
+    colorCount,
+    aspectRatio,
+    detailLevel,
+    borderMode,
+    cornerStyle: resolvedCornerStyle,
+    backgroundMode,
+    hasReferenceImage: Boolean(photoDataUrl),
+  });
+
+  async function handleCopyPrompt() {
+    try {
+      await navigator.clipboard.writeText(previewPrompt);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setLocalError("Could not copy the prompt.");
+    }
+  }
 
   return (
     <form className="creator-form" onSubmit={handleSubmit}>
@@ -335,9 +360,41 @@ export function CreatorForm({ busy, onGenerate }: CreatorFormProps) {
 
       {localError ? <p className="form-error">{localError}</p> : null}
 
-      <button className="primary-btn" type="submit" disabled={busy}>
-        {busy ? "Creating design…" : "Create design"}
-      </button>
+      <div className="form-actions">
+        <button className="primary-btn" type="submit" disabled={busy}>
+          {busy ? "Creating design…" : "Create design"}
+        </button>
+        <button
+          className="ghost-on-light"
+          type="button"
+          disabled={busy}
+          aria-expanded={showPromptPreview}
+          onClick={() => setShowPromptPreview((open) => !open)}
+        >
+          {showPromptPreview ? "Hide prompt" : "Preview prompt"}
+        </button>
+      </div>
+
+      {showPromptPreview ? (
+        <div className="prompt-preview">
+          <div className="prompt-preview-head">
+            <div>
+              <p className="prompt-preview-title">Assembled Imagine prompt</p>
+              <p className="field-hint">
+                No API call — this is exactly what Create design sends to xAI.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="text-btn"
+              onClick={() => void handleCopyPrompt()}
+            >
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <pre className="prompt-preview-body">{previewPrompt}</pre>
+        </div>
+      ) : null}
     </form>
   );
 }
