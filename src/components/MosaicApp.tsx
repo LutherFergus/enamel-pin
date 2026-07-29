@@ -1,9 +1,16 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
+import { ApiKeyGate } from "@/components/ApiKeyGate";
 import { CreatorForm } from "@/components/CreatorForm";
 import { Gallery } from "@/components/Gallery";
 import { ResultPanel } from "@/components/ResultPanel";
+import {
+  clearApiKey,
+  loadApiKey,
+  maskApiKey,
+  saveApiKey,
+} from "@/lib/apiKey";
 import {
   addToGallery,
   clearGallery,
@@ -24,12 +31,36 @@ export function MosaicApp() {
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [busy, setBusy] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [keyReady, setKeyReady] = useState(false);
+  const [keyModalOpen, setKeyModalOpen] = useState(false);
+  const [editingKey, setEditingKey] = useState(false);
 
   useEffect(() => {
     const loaded = loadGallery();
     setItems(loaded);
     if (loaded[0]) setCurrent(loaded[0]);
+
+    const storedKey = loadApiKey();
+    setApiKey(storedKey);
+    setKeyReady(true);
+    setKeyModalOpen(!storedKey);
   }, []);
+
+  function handleSaveKey(key: string) {
+    saveApiKey(key);
+    setApiKey(key);
+    setKeyModalOpen(false);
+    setEditingKey(false);
+    setError(null);
+  }
+
+  function handleClearKey() {
+    clearApiKey();
+    setApiKey("");
+    setEditingKey(false);
+    setKeyModalOpen(true);
+  }
 
   async function handleGenerate(input: {
     prompt: string;
@@ -37,12 +68,23 @@ export function MosaicApp() {
     imageDataUrl?: string;
   }) {
     setError(null);
+
+    const key = apiKey.trim() || loadApiKey();
+    if (!key) {
+      setKeyModalOpen(true);
+      setError("Add your xAI API key to generate mosaics.");
+      return;
+    }
+
     setBusy(true);
 
     try {
       const response = await fetch("/api/generate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-xai-api-key": key,
+        },
         body: JSON.stringify(input),
       });
 
@@ -51,6 +93,9 @@ export function MosaicApp() {
       };
 
       if (!response.ok) {
+        if (response.status === 401) {
+          setKeyModalOpen(true);
+        }
         throw new Error(payload.error || "Generation failed.");
       }
 
@@ -78,10 +123,57 @@ export function MosaicApp() {
 
   return (
     <div className="app-shell">
+      <ApiKeyGate
+        open={keyReady && keyModalOpen}
+        initialKey={apiKey}
+        allowDismiss={editingKey && Boolean(apiKey)}
+        onSave={handleSaveKey}
+        onClose={() => {
+          setKeyModalOpen(false);
+          setEditingKey(false);
+        }}
+      />
+
       <header className="hero">
         <div className="hero-atmosphere" aria-hidden="true" />
         <div className="hero-inner">
-          <p className="brand">Mosaic</p>
+          <div className="hero-top">
+            <p className="brand">Mosaic</p>
+            {keyReady ? (
+              <div className="key-chip">
+                {apiKey ? (
+                  <>
+                    <span>Key {maskApiKey(apiKey)}</span>
+                    <button
+                      type="button"
+                      className="text-btn key-chip-btn"
+                      onClick={() => {
+                        setEditingKey(true);
+                        setKeyModalOpen(true);
+                      }}
+                    >
+                      Change
+                    </button>
+                    <button
+                      type="button"
+                      className="text-btn key-chip-btn"
+                      onClick={handleClearKey}
+                    >
+                      Clear
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="text-btn key-chip-btn"
+                    onClick={() => setKeyModalOpen(true)}
+                  >
+                    Add API key
+                  </button>
+                )}
+              </div>
+            ) : null}
+          </div>
           <h1 className="hero-title">Image Creator</h1>
           <p className="hero-lede">
             Turn a prompt — and an optional photo — into a clean vector mosaic

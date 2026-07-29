@@ -4,12 +4,13 @@ Next.js app that turns a text prompt (and an optional photo) into **clean vector
 
 ## Features (v1)
 
+- Asks for your **xAI API key** in the browser (saved locally; Change/Clear anytime)
 - Text prompt + optional reference photo
 - AI-chosen palette of **2–5 colors** (default **2**)
 - Flat vector / graphghan-friendly mosaic look
 - **PNG download** for each design
 - Browser gallery stored in `localStorage`, capped at **50** designs
-- Ready for **Netlify** deploy with `XAI_API_KEY`
+- Ready for **Netlify** deploy (optional server-side `XAI_API_KEY`)
 
 ## Stack
 
@@ -28,7 +29,15 @@ Next.js app that turns a text prompt (and an optional photo) into **clean vector
 npm install
 ```
 
-2. Copy the env example and add your key from [console.x.ai](https://console.x.ai):
+2. Run the dev server:
+
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000). On first visit the app asks for your API key from [console.x.ai](https://console.x.ai). The key is stored in `localStorage` on your device.
+
+Optional: you can still set a server default key instead of (or in addition to) the browser prompt:
 
 ```bash
 cp .env.example .env.local
@@ -38,31 +47,19 @@ cp .env.example .env.local
 XAI_API_KEY=your_xai_api_key_here
 ```
 
-3. Run the dev server:
-
-```bash
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000).
-
 ## Environment variables
 
 | Variable       | Required | Description                                      |
 |----------------|----------|--------------------------------------------------|
-| `XAI_API_KEY`  | Yes      | Bearer token for the xAI Grok Imagine API        |
+| `XAI_API_KEY`  | No*      | Optional server fallback for the xAI API         |
 
-The key is read only on the server (`src/app/api/generate/route.ts` / `src/lib/xai.ts`). It is never exposed to the browser.
+\*Required only if you do **not** enter a key in the UI. When a browser key is provided, it is sent to `/api/generate` via the `x-xai-api-key` header and used for that request. The browser key never becomes a public env var.
 
 ## Deploy on Netlify
 
 1. Connect this repository in Netlify.
 2. Build settings are already in `netlify.toml` (uses `@netlify/plugin-nextjs`).
-3. Add site environment variable:
-
-   - Key: `XAI_API_KEY`
-   - Value: your xAI API key
-
+3. Optional: add site environment variable `XAI_API_KEY` if you want a shared server key. Otherwise visitors enter their own key in the UI.
 4. Deploy.
 
 Local Netlify CLI (optional):
@@ -73,11 +70,12 @@ npx netlify dev
 
 ## Usage
 
-1. Describe a motif in the prompt (e.g. “sleepy fox under a crescent moon”).
-2. Pick how many colors the AI should use (2–5).
-3. Optionally upload a photo to convert into a mosaic blanket motif.
-4. Click **Create mosaic**, then **Download PNG**.
-5. Browse past designs in the on-device gallery (max 50; oldest drop off).
+1. Enter your xAI API key when prompted (or use **Change** in the header later).
+2. Describe a motif in the prompt (e.g. “sleepy fox under a crescent moon”).
+3. Pick how many colors the AI should use (2–5).
+4. Optionally upload a photo to convert into a mosaic blanket motif.
+5. Click **Create mosaic**, then **Download PNG**.
+6. Browse past designs in the on-device gallery (max 50; oldest drop off).
 
 ## Scripts
 
@@ -99,11 +97,13 @@ src/
     globals.css
   components/
     MosaicApp.tsx
+    ApiKeyGate.tsx          # Browser API key prompt
     CreatorForm.tsx
     ResultPanel.tsx
     Gallery.tsx
   lib/
     xai.ts                  # xAI client
+    apiKey.ts               # localStorage API key helpers
     prompt.ts               # Mosaic style prompt builder
     gallery.ts              # localStorage gallery helpers
     types.ts
@@ -113,6 +113,7 @@ netlify.toml
 
 ## Notes
 
+- On first visit (or after Clear), the UI asks for your xAI API key and stores it in `localStorage`.
 - Generated images are requested as `b64_json` so PNG download and gallery storage work without relying on temporary xAI URLs.
 - Reference photos are resized client-side before upload to keep payloads modest.
 - The gallery never leaves the user’s browser.

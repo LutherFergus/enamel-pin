@@ -15,7 +15,21 @@ type Body = {
   prompt?: unknown;
   colorCount?: unknown;
   imageDataUrl?: unknown;
+  apiKey?: unknown;
 };
+
+function readApiKey(request: Request, body: Body): string | undefined {
+  const headerKey =
+    request.headers.get("x-xai-api-key")?.trim() ||
+    request.headers.get("x-api-key")?.trim();
+  if (headerKey) return headerKey;
+
+  if (typeof body.apiKey === "string" && body.apiKey.trim()) {
+    return body.apiKey.trim();
+  }
+
+  return undefined;
+}
 
 function isColorCount(value: unknown): value is ColorCount {
   return (
@@ -85,6 +99,7 @@ export async function POST(request: Request) {
     const result = await generateMosaicImage({
       prompt: promptUsed,
       imageDataUrl,
+      apiKey: readApiKey(request, body),
     });
 
     const payload: GenerateResponse = {
@@ -100,7 +115,7 @@ export async function POST(request: Request) {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Generation failed.";
-    const status = message.includes("XAI_API_KEY") ? 500 : 502;
+    const status = message.includes("XAI_API_KEY") ? 401 : 502;
     return NextResponse.json({ error: message }, { status });
   }
 }

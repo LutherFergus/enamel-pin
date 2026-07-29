@@ -115,6 +115,32 @@ textarea {
   color: #f6faf7;
 }
 
+.hero-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.35rem;
+}
+
+.key-chip {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: 12px;
+  background: rgba(246, 250, 247, 0.12);
+  border: 1px solid rgba(246, 250, 247, 0.28);
+  color: rgba(246, 250, 247, 0.9);
+  font-size: 0.9rem;
+}
+
+.key-chip-btn {
+  color: #f6faf7 !important;
+}
+
 .brand {
   margin: 0;
   font-family: var(--font-display), sans-serif;
@@ -220,7 +246,9 @@ textarea {
 }
 
 textarea,
-input[type="file"] {
+input[type="file"],
+input[type="password"],
+input[type="text"] {
   width: 100%;
   border-radius: 14px;
   border: 1px solid rgba(20, 32, 28, 0.14);
@@ -228,13 +256,20 @@ input[type="file"] {
   color: var(--ink);
 }
 
-textarea {
+textarea,
+input[type="password"],
+input[type="text"] {
   padding: 0.9rem 1rem;
+}
+
+textarea {
   resize: vertical;
   min-height: 7.5rem;
 }
 
-textarea:focus {
+textarea:focus,
+input[type="password"]:focus,
+input[type="text"]:focus {
   outline: 2px solid rgba(31, 122, 102, 0.35);
   border-color: var(--teal);
 }
@@ -490,6 +525,69 @@ textarea:focus {
 .gallery-actions {
   display: flex;
   gap: 0.85rem;
+}
+
+.api-key-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background:
+    radial-gradient(circle at 20% 10%, rgba(159, 192, 180, 0.35), transparent 40%),
+    rgba(14, 24, 20, 0.62);
+  backdrop-filter: blur(8px);
+  animation: fade-lift 0.28s ease both;
+}
+
+.api-key-panel {
+  width: min(440px, 100%);
+  padding: 1.5rem;
+  border-radius: calc(var(--radius) + 4px);
+  background: rgba(246, 250, 247, 0.96);
+  border: 1px solid rgba(20, 32, 28, 0.1);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+}
+
+.api-key-eyebrow {
+  margin: 0 0 0.35rem;
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--teal-deep);
+  font-weight: 700;
+}
+
+.api-key-panel h2 {
+  margin: 0;
+  font-family: var(--font-display), sans-serif;
+  font-size: 1.7rem;
+  letter-spacing: -0.04em;
+}
+
+.api-key-copy {
+  margin: 0.7rem 0 1.1rem;
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+
+.api-key-copy a {
+  color: var(--teal-deep);
+  text-decoration: underline;
+}
+
+.api-key-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+}
+
+.ghost-on-light {
+  background: transparent !important;
+  border-color: rgba(20, 32, 28, 0.16) !important;
+  color: var(--ink) !important;
 }
 
 .site-footer {

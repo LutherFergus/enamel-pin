@@ -15,14 +15,16 @@ type XaiImageResponse = {
   error?: { message?: string };
 };
 
-function getApiKey(): string {
-  const key = process.env.XAI_API_KEY?.trim();
-  if (!key) {
-    throw new Error(
-      "Missing XAI_API_KEY. Add it to your environment (local .env.local or Netlify site settings).",
-    );
-  }
-  return key;
+export function resolveApiKey(provided?: string | null): string {
+  const fromRequest = provided?.trim();
+  if (fromRequest) return fromRequest;
+
+  const fromEnv = process.env.XAI_API_KEY?.trim();
+  if (fromEnv) return fromEnv;
+
+  throw new Error(
+    "Missing XAI_API_KEY. Enter your key in the app, or set XAI_API_KEY in the environment.",
+  );
 }
 
 async function parseXaiResponse(response: Response): Promise<XaiImageResult> {
@@ -66,8 +68,9 @@ async function parseXaiResponse(response: Response): Promise<XaiImageResult> {
 export async function generateMosaicImage(options: {
   prompt: string;
   imageDataUrl?: string;
+  apiKey?: string | null;
 }): Promise<XaiImageResult> {
-  const apiKey = getApiKey();
+  const apiKey = resolveApiKey(options.apiKey);
   const hasImage = Boolean(options.imageDataUrl);
 
   const endpoint = hasImage
