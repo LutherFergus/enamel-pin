@@ -213,7 +213,7 @@ export function CreatorForm({ busy, onGenerate }: CreatorFormProps) {
       {borderMode === "border" ? (
         <OptionGroup
           label="Border artwork"
-          hint="How much ornament fills the border."
+          hint="How much ornament fills the border. Motifs stay large and stitch-readable."
           value={borderComplexity}
           options={[
             { value: "simple", label: "Simple" },
