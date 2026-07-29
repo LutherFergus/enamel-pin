@@ -1,48 +1,52 @@
 import { useEffect, useState } from 'react'
-import type { VectorizeResult } from '../lib/types'
+import type { DualOutputResult } from '../lib/pipeline'
+
+export type PreviewTab = 'source' | 'outline' | 'vector'
 
 type Props = {
-  viewMode: 'result' | 'source'
+  viewMode: PreviewTab
   sourceUrl: string | null
-  result: VectorizeResult | null
+  result: DualOutputResult | null
   busy: boolean
 }
 
 export function Preview({ viewMode, sourceUrl, result, busy }: Props) {
-  const [svgUrl, setSvgUrl] = useState<string | null>(null)
+  const [vectorUrl, setVectorUrl] = useState<string | null>(null)
 
   useEffect(() => {
     if (!result) {
-      setSvgUrl(null)
+      setVectorUrl(null)
       return
     }
-    const blob = new Blob([result.svg], { type: 'image/svg+xml;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    setSvgUrl(url)
-    return () => URL.revokeObjectURL(url)
+    setVectorUrl(result.vector.svgUrl)
   }, [result])
 
   if (!sourceUrl && !result) {
     return (
       <div className="preview-stage">
         <div className="empty-state">
-          <h3>Ready for artwork</h3>
-          <p>Upload a design. We’ll posterize it, merge tiny fills, and cut metal lines between colors.</p>
+          <h3>Upload or generate</h3>
+          <p>
+            You’ll get two assets: a transparent stroke-outline PNG, and a flat-color
+            vector SVG you can reduce by merging palette colors.
+          </p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="preview-stage" aria-busy={busy}>
+    <div className="preview-stage checker" aria-busy={busy}>
       {viewMode === 'source' && sourceUrl ? (
         <img src={sourceUrl} alt="Source artwork" />
-      ) : svgUrl ? (
-        <img src={svgUrl} alt="Vectorized enamel pin preview" />
+      ) : viewMode === 'outline' && result ? (
+        <img src={result.outline.pngUrl} alt="Stroke outline on transparent background" />
+      ) : viewMode === 'vector' && vectorUrl ? (
+        <img src={vectorUrl} alt="Color-quantized vector preview" />
       ) : (
         <div className="empty-state">
           <h3>Processing</h3>
-          <p>Building enamel fills…</p>
+          <p>Building outline and vector outputs…</p>
         </div>
       )}
     </div>

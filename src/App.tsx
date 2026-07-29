@@ -1,44 +1,63 @@
 import { useCallback, useEffect, useMemo, useState, useTransition } from 'react'
-import { Controls } from './components/Controls'
+import { AiGenerate } from './components/AiGenerate'
+import { DualControls } from './components/DualControls'
 import { Dropzone } from './components/Dropzone'
-import { Preview } from './components/Preview'
-import { DEFAULT_SETTINGS, type EnamelSettings, type VectorizeResult } from './lib/types'
-import { loadImageFromFile, prepareImage, vectorizeToSvg } from './lib/vectorize'
+import { PaletteMerge } from './components/PaletteMerge'
+import { Preview, type PreviewTab } from './components/Preview'
+import { generateAiImage } from './lib/aiGenerate'
+import {
+  createDualOutputs,
+  DEFAULT_DUAL_SETTINGS,
+  remergeVector,
+  revokeDualUrls,
+  type DualOutputResult,
+  type DualOutputSettings,
+} from './lib/pipeline'
+import { loadImageFromFile } from './lib/vectorize'
 
-type ViewMode = 'result' | 'source'
+type SourceMode = 'upload' | 'ai'
 
 export default function App() {
-  const [settings, setSettings] = useState<EnamelSettings>(DEFAULT_SETTINGS)
-  const [sourceFile, setSourceFile] = useState<File | null>(null)
+  const [settings, setSettings] = useState<DualOutputSettings>(DEFAULT_DUAL_SETTINGS)
+  const [sourceMode, setSourceMode] = useState<SourceMode>('upload')
+  const [sourceName, setSourceName] = useState('artwork')
   const [sourceUrl, setSourceUrl] = useState<string | null>(null)
   const [sourceImage, setSourceImage] = useState<HTMLImageElement | null>(null)
-  const [result, setResult] = useState<VectorizeResult | null>(null)
+  const [result, setResult] = useState<DualOutputResult | null>(null)
+  const [merges, setMerges] = useState<Array<[number, number]>>([])
   const [error, setError] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<ViewMode>('result')
+  const [viewMode, setViewMode] = useState<PreviewTab>('vector')
   const [isPending, startTransition] = useTransition()
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     return () => {
       if (sourceUrl) URL.revokeObjectURL(sourceUrl)
+      revokeDualUrls(result)
     }
-  }, [sourceUrl])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- unmount cleanup only
+  }, [])
 
-  const runVectorize = useCallback(
-    async (image: HTMLImageElement, nextSettings: EnamelSettings) => {
+  const runPipeline = useCallback(
+    async (
+      image: HTMLImageElement,
+      nextSettings: DualOutputSettings,
+      nextMerges: Array<[number, number]>,
+    ) => {
       setBusy(true)
       setError(null)
       try {
-        // Yield so the UI can paint the busy state
         await new Promise((r) => setTimeout(r, 16))
-        const prepared = prepareImage(image, nextSettings)
-        const next = vectorizeToSvg(prepared, nextSettings)
+        const next = await createDualOutputs(image, nextSettings, nextMerges)
         startTransition(() => {
-          setResult(next)
-          setViewMode('result')
+          setResult((prev) => {
+            revokeDualUrls(prev)
+            return next
+          })
+          setViewMode('vector')
         })
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Vectorization failed')
+        setError(err instanceof Error ? err.message : 'Processing failed')
       } finally {
         setBusy(false)
       }
@@ -46,75 +65,153 @@ export default function App() {
     [],
   )
 
+  const setSource = useCallback((image: HTMLImageElement, url: string, name: string) => {
+    setSourceUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return url
+    })
+    setSourceImage(image)
+    setSourceName(name)
+    setMerges([])
+  }, [])
+
   const onFile = useCallback(
     async (file: File) => {
       setError(null)
       try {
         const img = await loadImageFromFile(file)
         const url = URL.createObjectURL(file)
-        setSourceFile(file)
-        setSourceUrl((prev) => {
-          if (prev) URL.revokeObjectURL(prev)
-          return url
-        })
-        setSourceImage(img)
-        await runVectorize(img, settings)
+        setSource(img, url, file.name.replace(/\.[^.]+$/, '') || 'artwork')
+        setSourceMode('upload')
+        await runPipeline(img, settings, [])
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Could not load image')
       }
     },
-    [runVectorize, settings],
+    [runPipeline, setSource, settings],
   )
 
-  const onSettingsChange = useCallback((next: EnamelSettings) => {
-    setSettings(next)
-  }, [])
+  const onGenerate = useCallback(
+    async (prompt: string) => {
+      setBusy(true)
+      setError(null)
+      try {
+        const gen = await generateAiImage({ prompt })
+        setSource(gen.image, gen.objectUrl, slugify(prompt))
+        setSourceMode('ai')
+        await runPipeline(gen.image, settings, [])
+      } catch (err) {
+        setBusy(false)
+        setError(err instanceof Error ? err.message : 'Generation failed')
+      }
+    },
+    [runPipeline, setSource, settings],
+  )
 
   const onApply = useCallback(() => {
     if (!sourceImage) return
-    void runVectorize(sourceImage, settings)
-  }, [runVectorize, settings, sourceImage])
+    setMerges([])
+    void runPipeline(sourceImage, settings, [])
+  }, [runPipeline, settings, sourceImage])
 
-  const onDownload = useCallback(() => {
+  const onMergesChange = useCallback(
+    async (nextMerges: Array<[number, number]>) => {
+      setMerges(nextMerges)
+      if (!result) return
+      setBusy(true)
+      setError(null)
+      try {
+        const vector = await remergeVector(
+          result.vector,
+          nextMerges,
+          settings.vector.smoothness,
+        )
+        startTransition(() => {
+          setResult((prev) => {
+            if (!prev) return prev
+            URL.revokeObjectURL(prev.vector.svgUrl)
+            return { ...prev, vector }
+          })
+          setViewMode('vector')
+        })
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Merge failed')
+      } finally {
+        setBusy(false)
+      }
+    },
+    [result, settings.vector.smoothness],
+  )
+
+  const downloadOutline = useCallback(() => {
     if (!result) return
-    const blob = new Blob([result.svg], { type: 'image/svg+xml;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    const base = sourceFile?.name?.replace(/\.[^.]+$/, '') ?? 'enamel-pin'
-    a.href = url
-    a.download = `${base}-enamel.svg`
-    a.click()
-    URL.revokeObjectURL(url)
-  }, [result, sourceFile])
+    downloadBlob(result.outline.pngBlob, `${sourceName}-outline.png`)
+  }, [result, sourceName])
+
+  const downloadVector = useCallback(() => {
+    if (!result) return
+    downloadBlob(result.vector.svgBlob, `${sourceName}-vector.svg`)
+  }, [result, sourceName])
 
   const statusText = useMemo(() => {
-    if (busy || isPending) return 'Tracing enamel fills and metal walls…'
+    if (busy || isPending) return 'Building stroke outline and color vector…'
     if (error) return error
-    if (!result) return 'Upload artwork to begin'
-    return `${result.palette.length} colors · ${result.regionCount} fills · ${result.widthMm.toFixed(1)}×${result.heightMm.toFixed(1)} mm`
+    if (!result) return 'Upload an image or generate one with AI'
+    return `Outline PNG · Vector ${result.vector.palette.length} colors · ${result.vector.regionCount} shapes`
   }, [busy, error, isPending, result])
 
   return (
     <div className="app">
       <header className="hero">
-        <h1 className="brand">Enamel Pin Vectorizer</h1>
+        <h1 className="brand">Mosaic Image Creator</h1>
         <p className="lede">
-          Turn artwork into soft-enamel-ready SVG: flat color fills, minimum fill sizes,
-          and thin metal outlines wherever colors meet.
+          Upload or generate artwork, then get two outputs: a transparent stroke-outline PNG
+          and a flat-color vector SVG with adjustable — and mergeable — color counts.
         </p>
       </header>
 
       <div className="layout">
         <aside className="panel">
-          <h2>Artwork</h2>
-          <Dropzone onFile={onFile} disabled={busy} />
+          <div className="tabs source-tabs" role="tablist" aria-label="Source">
+            <button
+              type="button"
+              className={`tab ${sourceMode === 'upload' ? 'active' : ''}`}
+              onClick={() => setSourceMode('upload')}
+            >
+              Upload
+            </button>
+            <button
+              type="button"
+              className={`tab ${sourceMode === 'ai' ? 'active' : ''}`}
+              onClick={() => setSourceMode('ai')}
+            >
+              AI generate
+            </button>
+          </div>
 
-          <h2>Pin settings</h2>
-          <Controls
+          {sourceMode === 'upload' ? (
+            <>
+              <h2>Artwork</h2>
+              <Dropzone onFile={onFile} disabled={busy} />
+            </>
+          ) : (
+            <AiGenerate onGenerate={onGenerate} disabled={busy} />
+          )}
+
+          <DualControls
             settings={settings}
-            onChange={onSettingsChange}
+            onChange={setSettings}
             disabled={busy}
           />
+
+          {result && (
+            <PaletteMerge
+              palette={result.vector.palette}
+              merges={merges}
+              onChangeMerges={onMergesChange}
+              disabled={busy}
+            />
+          )}
 
           <div className="actions">
             <button
@@ -123,15 +220,23 @@ export default function App() {
               onClick={onApply}
               disabled={!sourceImage || busy}
             >
-              {busy ? 'Vectorizing…' : 'Vectorize'}
+              {busy ? 'Processing…' : 'Reprocess'}
             </button>
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={onDownload}
+              onClick={downloadOutline}
               disabled={!result || busy}
             >
-              Download SVG
+              Download outline PNG
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={downloadVector}
+              disabled={!result || busy}
+            >
+              Download vector SVG
             </button>
           </div>
         </aside>
@@ -141,11 +246,19 @@ export default function App() {
             <div className="tabs" role="tablist" aria-label="Preview mode">
               <button
                 type="button"
-                className={`tab ${viewMode === 'result' ? 'active' : ''}`}
-                onClick={() => setViewMode('result')}
+                className={`tab ${viewMode === 'vector' ? 'active' : ''}`}
+                onClick={() => setViewMode('vector')}
                 disabled={!result}
               >
-                Enamel SVG
+                Vector
+              </button>
+              <button
+                type="button"
+                className={`tab ${viewMode === 'outline' ? 'active' : ''}`}
+                onClick={() => setViewMode('outline')}
+                disabled={!result}
+              >
+                Outline
               </button>
               <button
                 type="button"
@@ -165,26 +278,27 @@ export default function App() {
             result={result}
             busy={busy || isPending}
           />
-
-          {result && (
-            <div className="palette" aria-label="Enamel palette">
-              {result.palette.map((c) => (
-                <span
-                  key={c.index}
-                  className="swatch"
-                  title={c.hex}
-                  style={{ background: c.hex }}
-                />
-              ))}
-              <span
-                className="swatch"
-                title="Metal outline"
-                style={{ background: settings.outlineColor }}
-              />
-            </div>
-          )}
         </section>
       </div>
     </div>
+  )
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function slugify(text: string): string {
+  return (
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 48) || 'ai-artwork'
   )
 }

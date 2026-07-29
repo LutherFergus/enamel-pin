@@ -324,6 +324,105 @@ img {
   background: rgba(28, 25, 21, 0.06);
 }
 
+.source-tabs {
+  margin-bottom: 1rem;
+  width: 100%;
+}
+
+.source-tabs .tab {
+  flex: 1;
+}
+
+.field textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid rgba(28, 25, 21, 0.14);
+  border-radius: 10px;
+  background: #fffdf8;
+  padding: 0.65rem 0.75rem;
+  color: var(--ink);
+  line-height: 1.45;
+}
+
+.ai-generate .btn {
+  width: 100%;
+  margin-top: 0.35rem;
+}
+
+.example-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 0.85rem;
+}
+
+.chip {
+  border: 1px solid rgba(28, 25, 21, 0.14);
+  background: #fffdf8;
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-deep);
+}
+
+.palette-merge {
+  margin-top: 0.35rem;
+  padding-top: 0.25rem;
+}
+
+.palette-merge-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.palette-merge-head h2 {
+  margin-bottom: 0;
+}
+
+.linkish {
+  border: none;
+  background: none;
+  color: var(--accent-deep);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.swatch-btn {
+  padding: 0;
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.swatch-btn:hover:not(:disabled) {
+  transform: scale(1.08);
+}
+
+.swatch-btn.selected {
+  box-shadow: 0 0 0 2px #fffdf8, 0 0 0 4px var(--accent);
+}
+
+.preview-stage.checker {
+  background-color: #f3efe6;
+  background-image:
+    linear-gradient(45deg, rgba(28, 25, 21, 0.07) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(28, 25, 21, 0.07) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(28, 25, 21, 0.07) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(28, 25, 21, 0.07) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
 .tab {
   border: none;
   background: transparent;

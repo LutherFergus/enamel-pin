@@ -1,15 +1,17 @@
-# Enamel Pin Vectorizer
+# Mosaic Image Creator
 
-Browser app that turns images into soft-enamel-ready SVGs.
+Turn uploaded or AI-generated artwork into two production-friendly assets:
+
+1. **Stroke outline PNG** — line art only, transparent background  
+2. **Color vector SVG** — flat-color vectorization with adjustable color count and palette merging (Vectorizer.AI–style)
 
 ## Features
 
-- Upload artwork (PNG, JPG, WebP)
-- Limit enamel fill color count
-- Set pin size in millimeters (converted to pixels via DPI)
-- Merge regions below a minimum fill size
-- Draw thin metal outlines where colors meet (plus outer rim)
-- Preview and download SVG
+- Upload PNG / JPG / WebP (or generate from a text prompt)
+- Dual output on every run
+- Color count slider + click-to-merge swatches to lower the palette further
+- Outline sensitivity and stroke thickness controls
+- Download both assets independently
 
 ## Develop
 
@@ -25,14 +27,6 @@ npm run build
 npm run preview
 ```
 
-## Soft enamel defaults
+## Soft enamel pin tooling
 
-| Setting | Default | Notes |
-| --- | --- | --- |
-| Color count | 6 | Flat enamel fills |
-| Pin width | 38 mm | ~1.5 in |
-| Min fill | 0.6 mm | Tiny regions merge into neighbors |
-| Metal wall | 0.25 mm | Outline stroke where colors meet |
-| DPI | 300 | Used for mm → px conversion |
-
-Adjust these in the sidebar to match your manufacturer’s specs.
+The repo also includes enamel-oriented helpers under `src/lib/` (metal walls, mm/DPI fill constraints) used by earlier pin-focused experiments. The main UI ships the dual-output pipeline above.
