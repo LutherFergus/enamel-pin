@@ -4,12 +4,14 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { evaluateMosaicDesign } from "@/lib/mosaic-brain";
 import { fileToResizedDataUrl } from "@/lib/gallery";
 import {
+  BORDER_MODE_OPTIONS,
   COLOR_COUNT_OPTIONS,
+  CORNER_STYLE_OPTIONS,
   DEFAULT_ASPECT_RATIO,
   DEFAULT_BACKGROUND_MODE,
-  DEFAULT_BORDER_COMPLEXITY,
   DEFAULT_BORDER_MODE,
   DEFAULT_COLOR_COUNT,
+  DEFAULT_CORNER_STYLE,
   DEFAULT_DETAIL_LEVEL,
   DEFAULT_ORIENTATION,
   ORIENTATION_OPTIONS,
@@ -18,9 +20,9 @@ import {
   orientationForAspect,
   type AspectRatio,
   type BackgroundMode,
-  type BorderComplexity,
   type BorderMode,
   type ColorCount,
+  type CornerStyle,
   type DetailLevel,
   type GenerateOptions,
   type Orientation,
@@ -86,8 +88,8 @@ export function CreatorForm({ busy, onGenerate }: CreatorFormProps) {
   const [detailLevel, setDetailLevel] =
     useState<DetailLevel>(DEFAULT_DETAIL_LEVEL);
   const [borderMode, setBorderMode] = useState<BorderMode>(DEFAULT_BORDER_MODE);
-  const [borderComplexity, setBorderComplexity] = useState<BorderComplexity>(
-    DEFAULT_BORDER_COMPLEXITY,
+  const [cornerStyle, setCornerStyle] = useState<CornerStyle>(
+    DEFAULT_CORNER_STYLE,
   );
   const [backgroundMode, setBackgroundMode] = useState<BackgroundMode>(
     DEFAULT_BACKGROUND_MODE,
@@ -142,8 +144,8 @@ export function CreatorForm({ busy, onGenerate }: CreatorFormProps) {
       aspectRatio,
       detailLevel,
       borderMode,
-      borderComplexity:
-        borderMode === "border" ? borderComplexity : DEFAULT_BORDER_COMPLEXITY,
+      cornerStyle:
+        borderMode === "corners" ? cornerStyle : DEFAULT_CORNER_STYLE,
       backgroundMode,
       imageDataUrl: photoDataUrl,
     });
@@ -155,8 +157,8 @@ export function CreatorForm({ busy, onGenerate }: CreatorFormProps) {
     aspectRatio,
     detailLevel,
     borderMode,
-    borderComplexity:
-      borderMode === "border" ? borderComplexity : DEFAULT_BORDER_COMPLEXITY,
+    cornerStyle:
+      borderMode === "corners" ? cornerStyle : DEFAULT_CORNER_STYLE,
     backgroundMode,
     hasReferenceImage: Boolean(photoDataUrl),
   });
@@ -233,25 +235,20 @@ export function CreatorForm({ busy, onGenerate }: CreatorFormProps) {
       <div className="field-row">
         <OptionGroup
           label="Border"
+          hint="Tiled band, corner accents, or none."
           value={borderMode}
-          options={[
-            { value: "none", label: "No border" },
-            { value: "border", label: "Border" },
-          ]}
+          options={BORDER_MODE_OPTIONS}
           disabled={busy}
           onChange={setBorderMode}
         />
-        {borderMode === "border" ? (
+        {borderMode === "corners" ? (
           <OptionGroup
-            label="Border artwork"
-            hint="Large stitch-readable motifs only."
-            value={borderComplexity}
-            options={[
-              { value: "simple", label: "Simple" },
-              { value: "complex", label: "Complex" },
-            ]}
+            label="Corner style"
+            hint="Thick ≈ 5% of canvas width. Top and bottom match."
+            value={cornerStyle}
+            options={CORNER_STYLE_OPTIONS}
             disabled={busy}
-            onChange={setBorderComplexity}
+            onChange={setCornerStyle}
           />
         ) : (
           <div className="field" aria-hidden="true" />

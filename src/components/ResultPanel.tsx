@@ -11,9 +11,11 @@ type ResultPanelProps = {
 
 function settingsLabel(item: GalleryItem): string {
   const border =
-    item.borderMode === "border"
-      ? `border · ${item.borderComplexity}`
-      : "no border";
+    item.borderMode === "none"
+      ? "no border"
+      : item.borderMode === "tiled"
+        ? "tiled border"
+        : `corners · ${item.cornerStyle}`;
   const background =
     item.backgroundMode === "themed" ? "themed bg" : "no bg";
   return `${item.aspectRatio} · ${item.detailLevel} · ${background} · ${border} · ${item.colorCount} colors`;

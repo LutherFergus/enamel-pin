@@ -15,9 +15,9 @@ export type Orientation = "square" | "landscape" | "portrait";
 
 export type DetailLevel = "simple" | "detailed";
 
-export type BorderMode = "none" | "border";
+export type BorderMode = "none" | "tiled" | "corners";
 
-export type BorderComplexity = "simple" | "complex";
+export type CornerStyle = "thin" | "thick" | "artistic";
 
 export type BackgroundMode = "none" | "themed";
 
@@ -27,7 +27,7 @@ export interface GenerateOptions {
   aspectRatio: AspectRatio;
   detailLevel: DetailLevel;
   borderMode: BorderMode;
-  borderComplexity: BorderComplexity;
+  cornerStyle: CornerStyle;
   backgroundMode: BackgroundMode;
   imageDataUrl?: string;
 }
@@ -40,7 +40,7 @@ export interface GenerateResponse {
   aspectRatio: AspectRatio;
   detailLevel: DetailLevel;
   borderMode: BorderMode;
-  borderComplexity: BorderComplexity;
+  cornerStyle: CornerStyle;
   backgroundMode: BackgroundMode;
 }
 
@@ -51,7 +51,7 @@ export interface GalleryItem {
   aspectRatio: AspectRatio;
   detailLevel: DetailLevel;
   borderMode: BorderMode;
-  borderComplexity: BorderComplexity;
+  cornerStyle: CornerStyle;
   backgroundMode: BackgroundMode;
   imageDataUrl: string;
   createdAt: string;
@@ -66,7 +66,7 @@ export const DEFAULT_ASPECT_RATIO: AspectRatio = "1:1";
 export const DEFAULT_ORIENTATION: Orientation = "square";
 export const DEFAULT_DETAIL_LEVEL: DetailLevel = "simple";
 export const DEFAULT_BORDER_MODE: BorderMode = "none";
-export const DEFAULT_BORDER_COMPLEXITY: BorderComplexity = "simple";
+export const DEFAULT_CORNER_STYLE: CornerStyle = "thin";
 export const DEFAULT_BACKGROUND_MODE: BackgroundMode = "none";
 
 export const ASPECT_RATIO_OPTIONS: AspectRatio[] = [
@@ -79,6 +79,18 @@ export const ASPECT_RATIO_OPTIONS: AspectRatio[] = [
   "9:16",
   "2:1",
   "1:2",
+];
+
+export const BORDER_MODE_OPTIONS: { value: BorderMode; label: string }[] = [
+  { value: "none", label: "No border" },
+  { value: "tiled", label: "Tiled" },
+  { value: "corners", label: "Corners" },
+];
+
+export const CORNER_STYLE_OPTIONS: { value: CornerStyle; label: string }[] = [
+  { value: "thin", label: "Thin" },
+  { value: "thick", label: "Thick" },
+  { value: "artistic", label: "Artistic" },
 ];
 
 export const ORIENTATION_OPTIONS: {

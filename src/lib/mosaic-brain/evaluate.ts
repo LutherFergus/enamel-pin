@@ -8,9 +8,9 @@ import {
 import type {
   AspectRatio,
   BackgroundMode,
-  BorderComplexity,
   BorderMode,
   ColorCount,
+  CornerStyle,
   DetailLevel,
 } from "@/lib/types";
 
@@ -20,7 +20,7 @@ export type DesignEvaluationInput = {
   aspectRatio: AspectRatio;
   detailLevel: DetailLevel;
   borderMode: BorderMode;
-  borderComplexity: BorderComplexity;
+  cornerStyle: CornerStyle;
   backgroundMode: BackgroundMode;
   hasReferenceImage: boolean;
 };
@@ -29,9 +29,7 @@ export type DesignPreference = "ideal" | "ok" | "risky";
 
 export type DesignEvaluation = {
   preference: DesignPreference;
-  /** Soft tips for the UI (never hard-block generation). */
   notes: string[];
-  /** Always-on directives injected into the Imagine prompt. */
   directives: string[];
   themeFamily: ReturnType<typeof detectThemeFamily>;
   backgroundMotifs: string[];
@@ -41,7 +39,7 @@ function scorePreference(flags: {
   colorCount: ColorCount;
   detailLevel: DetailLevel;
   borderMode: BorderMode;
-  borderComplexity: BorderComplexity;
+  cornerStyle: CornerStyle;
   backgroundMode: BackgroundMode;
 }): DesignPreference {
   let risk = 0;
@@ -52,15 +50,16 @@ function scorePreference(flags: {
     risk += 1;
   }
   if (
-    flags.borderMode === "border" &&
-    flags.borderComplexity === "complex" &&
-    flags.detailLevel === "detailed"
+    flags.borderMode === "tiled" &&
+    flags.detailLevel === "detailed" &&
+    flags.backgroundMode === "themed"
   ) {
     risk += 1;
   }
   if (
-    flags.borderMode === "border" &&
-    flags.borderComplexity === "complex" &&
+    flags.borderMode === "corners" &&
+    flags.cornerStyle === "artistic" &&
+    flags.detailLevel === "detailed" &&
     flags.backgroundMode === "themed"
   ) {
     risk += 1;
@@ -92,9 +91,7 @@ export function evaluateMosaicDesign(
   directives.push(
     `Prefer what works in yarn: ${POSSIBLE_VISUALS.join("; ")}.`,
   );
-  directives.push(
-    `Never include: ${FORBIDDEN_VISUALS.join("; ")}.`,
-  );
+  directives.push(`Never include: ${FORBIDDEN_VISUALS.join("; ")}.`);
   directives.push(
     "Bias toward SIMPLE. Extra ornaments must earn their place as large, high-contrast shapes — otherwise omit them.",
   );
@@ -131,14 +128,29 @@ export function evaluateMosaicDesign(
     notes.push("Simple detail is usually best for stitch translation.");
   }
 
-  if (input.borderMode === "border") {
-    if (input.borderComplexity === "complex") {
+  if (input.borderMode === "tiled") {
+    notes.push(
+      "Tiled borders use a few large repeating blocks — not tiny tile grids.",
+    );
+    directives.push(
+      "Tiled border: large stitch-safe tiles only. Top and bottom border thickness must match.",
+    );
+  } else if (input.borderMode === "corners") {
+    if (input.cornerStyle === "thin") {
+      notes.push("Thin corners: slender accents, matching top/bottom weight.");
+    } else if (input.cornerStyle === "thick") {
       notes.push(
-        "Complex borders should stay chunky. Tiny repeating icons will not survive stitches.",
+        "Thick corners: about 5% of canvas width, top and bottom matched.",
+      );
+      directives.push(
+        "Thick corner border thickness ≈ 5% of canvas width; top equals bottom.",
       );
     } else {
       notes.push(
-        "Simple borders: thick band or a few oversized corners — not mini motif chains.",
+        "Artistic corners stay simple — wavy/decorative is fine if shapes stay large.",
+      );
+      directives.push(
+        "Artistic corners: simple decorative forms only; top/bottom thickness must match.",
       );
     }
   }
@@ -171,10 +183,10 @@ export function evaluateMosaicDesign(
   if (
     input.detailLevel === "detailed" &&
     input.backgroundMode === "themed" &&
-    input.borderMode === "border"
+    input.borderMode !== "none"
   ) {
     notes.push(
-      "Detailed + themed background + border is a lot — the engine will still force large shapes, but simpler settings usually look better in yarn.",
+      "Detailed + themed background + border is a lot — simpler settings usually chart better.",
     );
   }
 

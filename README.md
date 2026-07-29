@@ -7,7 +7,7 @@ Next.js app that turns a text prompt (and an optional photo) into **clean vector
 - Asks for your **xAI API key** in the browser (saved locally; Change/Clear anytime)
 - Short subject prompt — a **mosaic brain** expands it and enforces stitch-feasible rules
 - Orientation + proportions (square / landscape / portrait ratios)
-- **Simple / Detailed**, **Background / No background**, **Border / No border**, border **Simple / Complex**
+- **Simple / Detailed**, **Background / No background**, **Border: None / Tiled / Corners** (corners: Thin / Thick / Artistic)
 - Optional reference photo
 - AI-chosen palette of **2–5 colors** (default **2**)
 - Exclusive output: mosaic-blanket-ready crisp flat vector art (2k PNG)

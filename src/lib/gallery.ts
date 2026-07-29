@@ -1,16 +1,16 @@
 import {
   DEFAULT_ASPECT_RATIO,
   DEFAULT_BACKGROUND_MODE,
-  DEFAULT_BORDER_COMPLEXITY,
   DEFAULT_BORDER_MODE,
+  DEFAULT_CORNER_STYLE,
   DEFAULT_DETAIL_LEVEL,
   GALLERY_MAX_ITEMS,
   GALLERY_STORAGE_KEY,
   type AspectRatio,
   type BackgroundMode,
-  type BorderComplexity,
   type BorderMode,
   type ColorCount,
+  type CornerStyle,
   type DetailLevel,
   type GalleryItem,
 } from "./types";
@@ -19,12 +19,34 @@ const DB_NAME = "mosaic-image-creator";
 const DB_VERSION = 1;
 const STORE_NAME = "gallery";
 
+function migrateBorderMode(raw: unknown): BorderMode {
+  if (raw === "tiled" || raw === "corners" || raw === "none") return raw;
+  if (raw === "border") return "corners";
+  return DEFAULT_BORDER_MODE;
+}
+
+function migrateCornerStyle(
+  item: Partial<GalleryItem> & { borderComplexity?: unknown },
+): CornerStyle {
+  if (
+    item.cornerStyle === "thin" ||
+    item.cornerStyle === "thick" ||
+    item.cornerStyle === "artistic"
+  ) {
+    return item.cornerStyle;
+  }
+  if (item.borderComplexity === "complex") return "artistic";
+  if (item.borderComplexity === "simple") return "thin";
+  return DEFAULT_CORNER_STYLE;
+}
+
 function normalizeGalleryItem(item: Partial<GalleryItem> & {
   id?: string;
   prompt?: string;
   colorCount?: ColorCount;
   imageDataUrl?: string;
   createdAt?: string;
+  borderComplexity?: unknown;
 }): GalleryItem | null {
   if (
     !item.id ||
@@ -42,9 +64,8 @@ function normalizeGalleryItem(item: Partial<GalleryItem> & {
     colorCount: item.colorCount,
     aspectRatio: (item.aspectRatio as AspectRatio) || DEFAULT_ASPECT_RATIO,
     detailLevel: (item.detailLevel as DetailLevel) || DEFAULT_DETAIL_LEVEL,
-    borderMode: (item.borderMode as BorderMode) || DEFAULT_BORDER_MODE,
-    borderComplexity:
-      (item.borderComplexity as BorderComplexity) || DEFAULT_BORDER_COMPLEXITY,
+    borderMode: migrateBorderMode(item.borderMode),
+    cornerStyle: migrateCornerStyle(item),
     backgroundMode:
       (item.backgroundMode as BackgroundMode) || DEFAULT_BACKGROUND_MODE,
     imageDataUrl: item.imageDataUrl,
@@ -194,7 +215,7 @@ export async function addToGallery(input: {
   aspectRatio: AspectRatio;
   detailLevel: DetailLevel;
   borderMode: BorderMode;
-  borderComplexity: BorderComplexity;
+  cornerStyle: CornerStyle;
   backgroundMode: BackgroundMode;
   imageDataUrl: string;
 }): Promise<GalleryItem[]> {
@@ -208,7 +229,7 @@ export async function addToGallery(input: {
     aspectRatio: input.aspectRatio,
     detailLevel: input.detailLevel,
     borderMode: input.borderMode,
-    borderComplexity: input.borderComplexity,
+    cornerStyle: input.cornerStyle,
     backgroundMode: input.backgroundMode,
     imageDataUrl: input.imageDataUrl,
     createdAt: new Date().toISOString(),

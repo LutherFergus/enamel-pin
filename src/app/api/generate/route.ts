@@ -6,15 +6,15 @@ import {
   COLOR_COUNT_OPTIONS,
   DEFAULT_ASPECT_RATIO,
   DEFAULT_BACKGROUND_MODE,
-  DEFAULT_BORDER_COMPLEXITY,
   DEFAULT_BORDER_MODE,
   DEFAULT_COLOR_COUNT,
+  DEFAULT_CORNER_STYLE,
   DEFAULT_DETAIL_LEVEL,
   type AspectRatio,
   type BackgroundMode,
-  type BorderComplexity,
   type BorderMode,
   type ColorCount,
+  type CornerStyle,
   type DetailLevel,
   type GenerateResponse,
 } from "@/lib/types";
@@ -28,7 +28,7 @@ type Body = {
   aspectRatio?: unknown;
   detailLevel?: unknown;
   borderMode?: unknown;
-  borderComplexity?: unknown;
+  cornerStyle?: unknown;
   backgroundMode?: unknown;
   imageDataUrl?: unknown;
   apiKey?: unknown;
@@ -66,11 +66,11 @@ function isDetailLevel(value: unknown): value is DetailLevel {
 }
 
 function isBorderMode(value: unknown): value is BorderMode {
-  return value === "none" || value === "border";
+  return value === "none" || value === "tiled" || value === "corners";
 }
 
-function isBorderComplexity(value: unknown): value is BorderComplexity {
-  return value === "simple" || value === "complex";
+function isCornerStyle(value: unknown): value is CornerStyle {
+  return value === "thin" || value === "thick" || value === "artistic";
 }
 
 function isBackgroundMode(value: unknown): value is BackgroundMode {
@@ -116,9 +116,9 @@ export async function POST(request: Request) {
     const borderMode = isBorderMode(body.borderMode)
       ? body.borderMode
       : DEFAULT_BORDER_MODE;
-    const borderComplexity = isBorderComplexity(body.borderComplexity)
-      ? body.borderComplexity
-      : DEFAULT_BORDER_COMPLEXITY;
+    const cornerStyle = isCornerStyle(body.cornerStyle)
+      ? body.cornerStyle
+      : DEFAULT_CORNER_STYLE;
     const backgroundMode = isBackgroundMode(body.backgroundMode)
       ? body.backgroundMode
       : DEFAULT_BACKGROUND_MODE;
@@ -144,8 +144,8 @@ export async function POST(request: Request) {
       );
     }
 
-    const resolvedBorderComplexity =
-      borderMode === "border" ? borderComplexity : "simple";
+    const resolvedCornerStyle =
+      borderMode === "corners" ? cornerStyle : DEFAULT_CORNER_STYLE;
 
     const promptUsed = buildMosaicPrompt({
       userPrompt: prompt,
@@ -153,7 +153,7 @@ export async function POST(request: Request) {
       aspectRatio,
       detailLevel,
       borderMode,
-      borderComplexity: resolvedBorderComplexity,
+      cornerStyle: resolvedCornerStyle,
       backgroundMode,
       hasReferenceImage: Boolean(imageDataUrl),
     });
@@ -175,7 +175,7 @@ export async function POST(request: Request) {
       aspectRatio,
       detailLevel,
       borderMode,
-      borderComplexity: resolvedBorderComplexity,
+      cornerStyle: resolvedCornerStyle,
       backgroundMode,
     };
 

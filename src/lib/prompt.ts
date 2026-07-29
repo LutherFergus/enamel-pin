@@ -2,9 +2,9 @@ import { evaluateMosaicDesign } from "@/lib/mosaic-brain";
 import type {
   AspectRatio,
   BackgroundMode,
-  BorderComplexity,
   BorderMode,
   ColorCount,
+  CornerStyle,
   DetailLevel,
 } from "./types";
 
@@ -14,7 +14,7 @@ export type PromptBuildInput = {
   aspectRatio: AspectRatio;
   detailLevel: DetailLevel;
   borderMode: BorderMode;
-  borderComplexity: BorderComplexity;
+  cornerStyle: CornerStyle;
   backgroundMode: BackgroundMode;
   hasReferenceImage: boolean;
 };
@@ -60,43 +60,70 @@ function detailInstruction(detailLevel: DetailLevel): string {
   ].join(" ");
 }
 
+function thicknessMatchRule(): string {
+  return "Thickness rule: the top border band and the bottom border band must match each other in thickness exactly. Left and right sides should feel balanced with that same visual weight.";
+}
+
 function borderInstruction(
   borderMode: BorderMode,
-  borderComplexity: BorderComplexity,
+  cornerStyle: CornerStyle,
 ): string {
   if (borderMode === "none") {
     return [
       "Border: NONE.",
-      "No frame, no decorative edge band, no vignette.",
+      "No frame, no decorative edge band, no vignette, no corner ornaments.",
     ].join(" ");
   }
 
-  const mosaicBorderRules = [
-    "Critical border rule for mosaic blankets: stitches cannot capture tiny icons.",
-    "Use only a few LARGE motifs in the border — big enough to read from across a room.",
-    "Forbidden in borders: dense repeating mini-icons, tiny horseshoes/stars/dots, fine filigree, thin hatching, crowded chains of small ornaments.",
-    "Prefer thick solid bands, oversized corner motifs, or a small number of large spaced motifs (roughly 4–12 total around the whole frame, not dozens).",
+  const stitchSafe = [
+    "Border motifs must stay stitch-readable: large chunky shapes only.",
+    "Forbidden: dense mini-icons, tiny repeats, filigree, or dozens of small ornaments.",
   ].join(" ");
 
-  if (borderComplexity === "simple") {
+  if (borderMode === "tiled") {
     return [
-      "Border: YES — SIMPLE.",
-      "Add a restrained frame: a thick solid border band and/or a handful of oversized corner accents.",
-      "Keep ornament extremely limited — think 4 large corner motifs max, or a plain double-line frame with wide empty margin.",
-      "Do not fill the border with a repeating mini pattern.",
-      mosaicBorderRules,
-      "Center subject stays dominant; border stays quiet and bold.",
+      "Border: TILED.",
+      "Wrap the artwork in a continuous tiled border band made of a few LARGE repeating tile blocks.",
+      "Tiles should be big and simple (think oversized squares, diamonds, or block motifs) — not a tiny mosaic grid.",
+      "Keep tile count modest so each tile remains chartable in yarn.",
+      thicknessMatchRule(),
+      "Top and bottom tiled bands must be the same thickness.",
+      stitchSafe,
+    ].join(" ");
+  }
+
+  // corners
+  if (cornerStyle === "thin") {
+    return [
+      "Border: CORNERS — THIN.",
+      "Add only thin corner accents and/or a slender frame line.",
+      "Keep ornament minimal and clean. No heavy bands.",
+      thicknessMatchRule(),
+      "If any top/bottom edge treatment appears, top and bottom must match in thinness.",
+      stitchSafe,
+    ].join(" ");
+  }
+
+  if (cornerStyle === "thick") {
+    return [
+      "Border: CORNERS — THICK.",
+      "Add a strong corner/frame treatment where the border band thickness is roughly 5% of the canvas width.",
+      "Example: on a 2000px-wide canvas, border thickness ≈ 100px (about 5%).",
+      "Use solid chunky corner blocks or a thick frame — still simple and flat.",
+      thicknessMatchRule(),
+      "Top and bottom thick borders must match at that ~5% thickness.",
+      stitchSafe,
     ].join(" ");
   }
 
   return [
-    "Border: YES — COMPLEX.",
-    "Add a fuller decorative border that occupies the outer margin with intentional large ornament.",
-    "Complexity means bigger motif variety and stronger border presence — NOT smaller or denser icons.",
-    "Use large repeating blocks, oversized scrolls, chunky botanical shapes, or bold geometric panels with clear spacing.",
-    "Still only a modest count of motifs; each motif should be chunky and stitch-readable.",
-    mosaicBorderRules,
-    "Keep the center subject readable; put abundance into large border shapes, not fine detail.",
+    "Border: CORNERS — ARTISTIC.",
+    "Create an artistic but SIMPLE corner border: elegant, hand-designed feeling, still easy to chart.",
+    "Allowed: gentle waves, curved corner flourishes, or varied thin/thick artistic strokes — as long as shapes stay large and few.",
+    "Keep it simple: decorative, not busy. No dense lace, no tiny repeats.",
+    thicknessMatchRule(),
+    "Whatever thickness you choose for the top edge must match the bottom edge exactly.",
+    stitchSafe,
   ].join(" ");
 }
 
@@ -133,7 +160,7 @@ export function buildMosaicPrompt(input: PromptBuildInput): string {
     aspectRatio: input.aspectRatio,
     detailLevel: input.detailLevel,
     borderMode: input.borderMode,
-    borderComplexity: input.borderComplexity,
+    cornerStyle: input.cornerStyle,
     backgroundMode: input.backgroundMode,
     hasReferenceImage: input.hasReferenceImage,
   });
@@ -156,7 +183,7 @@ export function buildMosaicPrompt(input: PromptBuildInput): string {
     ...evaluation.directives,
     colorInstruction(input.colorCount),
     detailInstruction(input.detailLevel),
-    borderInstruction(input.borderMode, input.borderComplexity),
+    borderInstruction(input.borderMode, input.cornerStyle),
     backgroundInstruction(input.backgroundMode, evaluation.backgroundMotifs),
     referenceLine,
     "Deliver one cohesive finished illustration that a crocheter could chart into a blanket without losing the idea.",
@@ -170,7 +197,7 @@ export function getDesignNotes(input: PromptBuildInput) {
     aspectRatio: input.aspectRatio,
     detailLevel: input.detailLevel,
     borderMode: input.borderMode,
-    borderComplexity: input.borderComplexity,
+    cornerStyle: input.cornerStyle,
     backgroundMode: input.backgroundMode,
     hasReferenceImage: input.hasReferenceImage,
   });
