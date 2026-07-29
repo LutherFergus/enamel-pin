@@ -632,3 +632,29 @@ img {
     opacity: 1;
   }
 }
+
+.hero-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.screenshot-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+.save-shot-btn {
+  border: 1px solid rgba(212, 168, 83, 0.55);
+  background: rgba(212, 168, 83, 0.16);
+  color: var(--gold, #d4a853);
+  border-radius: 999px;
+  padding: 0.45rem 0.9rem;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.save-shot-btn:disabled { opacity: 0.6; cursor: wait; }
+.save-shot-status { color: var(--muted, #6b6458); font-size: 0.78rem; }

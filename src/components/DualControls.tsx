@@ -19,19 +19,22 @@ export function DualControls({ settings, onChange, disabled }: Props) {
       <h2>Stroke outline (PNG)</h2>
       <div className="field">
         <label>
-          <span>Sensitivity</span>
+          <span>Outline detail</span>
           <span className="value">{settings.outline.sensitivity}</span>
         </label>
         <input
           type="range"
-          min={10}
-          max={90}
+          min={0}
+          max={100}
           step={1}
           value={settings.outline.sensitivity}
           disabled={disabled}
           onChange={(e) => patchOutline({ sensitivity: Number(e.target.value) })}
         />
       </div>
+      <p className="hint">
+        Lower = cleaner enamel die-lines. Higher = more internal strokes. Avoids textured noise.
+      </p>
       <div className="field">
         <label>
           <span>Stroke thickness</span>
@@ -40,14 +43,14 @@ export function DualControls({ settings, onChange, disabled }: Props) {
         <input
           type="range"
           min={1}
-          max={6}
+          max={8}
           step={1}
           value={settings.outline.thickness}
           disabled={disabled}
           onChange={(e) => patchOutline({ thickness: Number(e.target.value) })}
         />
       </div>
-      <p className="hint">Transparent PNG of line strokes only — no fills.</p>
+      <p className="hint">Transparent PNG of metal-style outlines only — flat color boundaries, not photo edges.</p>
 
       <h2>Color vector (SVG)</h2>
       <div className="field">

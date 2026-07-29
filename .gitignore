@@ -4,3 +4,7 @@ dist
 *.local
 *.tsbuildinfo
 .vite
+
+# Agent review captures (local only)
+review-screenshots/*.png
+review-screenshots/*.jpg
