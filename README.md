@@ -116,4 +116,4 @@ netlify.toml
 - On first visit (or after Clear), the UI asks for your xAI API key and stores it in `localStorage`.
 - Generated images are requested as `b64_json` so PNG download and gallery storage work without relying on temporary xAI URLs.
 - Reference photos are resized client-side before upload to keep payloads modest.
-- The gallery never leaves the user’s browser.
+- The gallery never leaves the user’s browser (IndexedDB; max 50 designs).

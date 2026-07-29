@@ -37,14 +37,23 @@ export function MosaicApp() {
   const [editingKey, setEditingKey] = useState(false);
 
   useEffect(() => {
-    const loaded = loadGallery();
-    setItems(loaded);
-    if (loaded[0]) setCurrent(loaded[0]);
+    let cancelled = false;
 
-    const storedKey = loadApiKey();
-    setApiKey(storedKey);
-    setKeyReady(true);
-    setKeyModalOpen(!storedKey);
+    void (async () => {
+      const loaded = await loadGallery();
+      if (cancelled) return;
+      setItems(loaded);
+      if (loaded[0]) setCurrent(loaded[0]);
+
+      const storedKey = loadApiKey();
+      setApiKey(storedKey);
+      setKeyReady(true);
+      setKeyModalOpen(!storedKey);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   function handleSaveKey(key: string) {
@@ -104,13 +113,13 @@ export function MosaicApp() {
         payload.mimeType,
       );
       const imageDataUrl = await toPngDataUrl(rawDataUrl);
+      const next = await addToGallery({
+        prompt: input.prompt,
+        colorCount: payload.colorCount,
+        imageDataUrl,
+      });
 
       startTransition(() => {
-        const next = addToGallery({
-          prompt: input.prompt,
-          colorCount: payload.colorCount,
-          imageDataUrl,
-        });
         setItems(next);
         setCurrent(next[0] ?? null);
       });
@@ -208,17 +217,21 @@ export function MosaicApp() {
           items={items}
           onSelect={setCurrent}
           onRemove={(id) => {
-            const next = removeFromGallery(id);
-            setItems(next);
-            setCurrent((prev) => {
-              if (!prev || prev.id !== id) return prev;
-              return next[0] ?? null;
-            });
+            void (async () => {
+              const next = await removeFromGallery(id);
+              setItems(next);
+              setCurrent((prev) => {
+                if (!prev || prev.id !== id) return prev;
+                return next[0] ?? null;
+              });
+            })();
           }}
           onClear={() => {
-            clearGallery();
-            setItems([]);
-            setCurrent(null);
+            void (async () => {
+              await clearGallery();
+              setItems([]);
+              setCurrent(null);
+            })();
           }}
         />
       </main>

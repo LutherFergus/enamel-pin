@@ -5,36 +5,147 @@ import {
   type GalleryItem,
 } from "./types";
 
-function canUseStorage(): boolean {
-  return typeof window !== "undefined" && typeof localStorage !== "undefined";
+const DB_NAME = "mosaic-image-creator";
+const DB_VERSION = 1;
+const STORE_NAME = "gallery";
+
+function canUseIndexedDb(): boolean {
+  return typeof window !== "undefined" && typeof indexedDB !== "undefined";
 }
 
-export function loadGallery(): GalleryItem[] {
-  if (!canUseStorage()) return [];
+function openGalleryDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onerror = () =>
+      reject(request.error ?? new Error("Could not open gallery storage."));
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+  });
+}
+
+function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () =>
+      reject(request.error ?? new Error("Gallery storage request failed."));
+  });
+}
+
+function transactionDone(tx: IDBTransaction): Promise<void> {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () =>
+      reject(tx.error ?? new Error("Gallery storage transaction failed."));
+    tx.onabort = () =>
+      reject(tx.error ?? new Error("Gallery storage transaction aborted."));
+  });
+}
+
+function sortNewestFirst(items: GalleryItem[]): GalleryItem[] {
+  return [...items].sort(
+    (a, b) =>
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
+}
+
+function readLegacyLocalStorageGallery(): GalleryItem[] {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") {
+    return [];
+  }
   try {
     const raw = localStorage.getItem(GALLERY_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as GalleryItem[];
-    if (!Array.isArray(parsed)) return [];
-    return parsed.slice(0, GALLERY_MAX_ITEMS);
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
 }
 
-function saveGallery(items: GalleryItem[]): void {
-  if (!canUseStorage()) return;
-  localStorage.setItem(
-    GALLERY_STORAGE_KEY,
-    JSON.stringify(items.slice(0, GALLERY_MAX_ITEMS)),
-  );
+function clearLegacyLocalStorageGallery(): void {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") {
+    return;
+  }
+  try {
+    localStorage.removeItem(GALLERY_STORAGE_KEY);
+  } catch {
+    // Ignore quota/security errors while clearing.
+  }
 }
 
-export function addToGallery(input: {
+async function writeAllItems(items: GalleryItem[]): Promise<GalleryItem[]> {
+  if (!canUseIndexedDb()) {
+    throw new Error("This browser cannot store the gallery.");
+  }
+
+  const capped = sortNewestFirst(items).slice(0, GALLERY_MAX_ITEMS);
+  const db = await openGalleryDb();
+
+  try {
+    const clearTx = db.transaction(STORE_NAME, "readwrite");
+    clearTx.objectStore(STORE_NAME).clear();
+    await transactionDone(clearTx);
+
+    if (capped.length === 0) return [];
+
+    const writeTx = db.transaction(STORE_NAME, "readwrite");
+    const store = writeTx.objectStore(STORE_NAME);
+    for (const item of capped) {
+      store.put(item);
+    }
+    await transactionDone(writeTx);
+    return capped;
+  } finally {
+    db.close();
+  }
+}
+
+async function readAllItems(): Promise<GalleryItem[]> {
+  if (!canUseIndexedDb()) return [];
+  const db = await openGalleryDb();
+  try {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const items = await requestToPromise(
+      tx.objectStore(STORE_NAME).getAll() as IDBRequest<GalleryItem[]>,
+    );
+    await transactionDone(tx);
+    return sortNewestFirst(items ?? []).slice(0, GALLERY_MAX_ITEMS);
+  } finally {
+    db.close();
+  }
+}
+
+async function migrateLegacyGalleryIfNeeded(): Promise<void> {
+  const legacy = readLegacyLocalStorageGallery();
+  if (legacy.length === 0) return;
+
+  const existing = await readAllItems();
+  if (existing.length === 0) {
+    await writeAllItems(legacy);
+  }
+  clearLegacyLocalStorageGallery();
+}
+
+export async function loadGallery(): Promise<GalleryItem[]> {
+  if (!canUseIndexedDb()) return [];
+  try {
+    await migrateLegacyGalleryIfNeeded();
+    return await readAllItems();
+  } catch {
+    return [];
+  }
+}
+
+export async function addToGallery(input: {
   prompt: string;
   colorCount: ColorCount;
   imageDataUrl: string;
-}): GalleryItem[] {
+}): Promise<GalleryItem[]> {
   const nextItem: GalleryItem = {
     id:
       typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -46,21 +157,32 @@ export function addToGallery(input: {
     createdAt: new Date().toISOString(),
   };
 
-  const existing = loadGallery().filter((item) => item.id !== nextItem.id);
-  const next = [nextItem, ...existing].slice(0, GALLERY_MAX_ITEMS);
-  saveGallery(next);
-  return next;
-}
+  const existing = (await loadGallery()).filter(
+    (item) => item.id !== nextItem.id,
+  );
+  let next = [nextItem, ...existing].slice(0, GALLERY_MAX_ITEMS);
 
-export function removeFromGallery(id: string): GalleryItem[] {
-  const next = loadGallery().filter((item) => item.id !== id);
-  saveGallery(next);
-  return next;
-}
+  // If storage is still tight, drop oldest designs until the write succeeds.
+  while (next.length > 0) {
+    try {
+      return await writeAllItems(next);
+    } catch (error) {
+      if (next.length <= 1) throw error;
+      next = next.slice(0, next.length - 1);
+    }
+  }
 
-export function clearGallery(): GalleryItem[] {
-  saveGallery([]);
   return [];
+}
+
+export async function removeFromGallery(id: string): Promise<GalleryItem[]> {
+  const next = (await loadGallery()).filter((item) => item.id !== id);
+  return writeAllItems(next);
+}
+
+export async function clearGallery(): Promise<GalleryItem[]> {
+  clearLegacyLocalStorageGallery();
+  return writeAllItems([]);
 }
 
 export function downloadPng(imageDataUrl: string, filename: string): void {
