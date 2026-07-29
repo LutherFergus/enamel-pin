@@ -4,6 +4,7 @@ import {
   vectorizeColors,
   type ColorVectorResult,
   type ColorVectorSettings,
+  type PmsOverrides,
 } from './colorVectorize'
 import {
   DEFAULT_OUTLINE_SETTINGS,
@@ -27,19 +28,15 @@ export type DualOutputResult = {
   vector: ColorVectorResult
 }
 
-/**
- * Always produce both assets from a source image:
- * 1) stroke outline PNG (transparent)
- * 2) flat-color vector SVG
- */
 export async function createDualOutputs(
   source: HTMLImageElement | ImageBitmap,
   settings: DualOutputSettings,
   merges: Array<[number, number]> = [],
+  overrides: PmsOverrides = {},
 ): Promise<DualOutputResult> {
   const [outline, vector] = await Promise.all([
     extractOutlinePng(source, settings.outline),
-    vectorizeColors(source, settings.vector, merges),
+    vectorizeColors(source, settings.vector, merges, overrides),
   ])
   return { outline, vector }
 }
@@ -48,8 +45,16 @@ export async function remergeVector(
   previous: ColorVectorResult,
   merges: Array<[number, number]>,
   smoothness: number,
+  snapToPms: boolean,
+  overrides: PmsOverrides = {},
 ): Promise<ColorVectorResult> {
-  return applyPaletteMerges(previous.state, merges, smoothness)
+  return applyPaletteMerges(
+    previous.state,
+    merges,
+    smoothness,
+    snapToPms,
+    overrides,
+  )
 }
 
 export function revokeDualUrls(result: DualOutputResult | null) {

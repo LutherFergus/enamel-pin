@@ -66,7 +66,20 @@ export function DualControls({ settings, onChange, disabled }: Props) {
         />
       </div>
       <p className="hint">
-        Like Vectorizer.AI — flatten to N colors, then merge swatches below to reduce further.
+        Like Vectorizer.AI — flatten to N colors, then merge swatches or reassign PMS below.
+      </p>
+
+      <label className="check-row">
+        <input
+          type="checkbox"
+          checked={settings.vector.snapToPms}
+          disabled={disabled}
+          onChange={(e) => patchVector({ snapToPms: e.target.checked })}
+        />
+        <span>Snap fills to PMS Solid Coated</span>
+      </label>
+      <p className="hint">
+        Maps each fill to the nearest Pantone code used for soft enamel pin matching.
       </p>
       <div className="field">
         <label>

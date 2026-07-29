@@ -3,8 +3,10 @@ import { AiGenerate } from './components/AiGenerate'
 import { DualControls } from './components/DualControls'
 import { Dropzone } from './components/Dropzone'
 import { PaletteMerge } from './components/PaletteMerge'
+import { PmsChartModal } from './components/PmsChartModal'
 import { Preview, type PreviewTab } from './components/Preview'
 import { generateAiImage } from './lib/aiGenerate'
+import type { PmsOverrides } from './lib/colorVectorize'
 import {
   createDualOutputs,
   DEFAULT_DUAL_SETTINGS,
@@ -13,6 +15,7 @@ import {
   type DualOutputResult,
   type DualOutputSettings,
 } from './lib/pipeline'
+import { getPmsChartSize } from './lib/pms'
 import { loadImageFromFile } from './lib/vectorize'
 
 type SourceMode = 'upload' | 'ai'
@@ -25,6 +28,8 @@ export default function App() {
   const [sourceImage, setSourceImage] = useState<HTMLImageElement | null>(null)
   const [result, setResult] = useState<DualOutputResult | null>(null)
   const [merges, setMerges] = useState<Array<[number, number]>>([])
+  const [pmsOverrides, setPmsOverrides] = useState<PmsOverrides>({})
+  const [chartOpen, setChartOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<PreviewTab>('vector')
   const [isPending, startTransition] = useTransition()
@@ -38,17 +43,57 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- unmount cleanup only
   }, [])
 
+  const refreshVector = useCallback(
+    async (
+      nextMerges: Array<[number, number]>,
+      nextOverrides: PmsOverrides,
+      nextSettings: DualOutputSettings = settings,
+    ) => {
+      if (!result) return
+      setBusy(true)
+      setError(null)
+      try {
+        const vector = await remergeVector(
+          result.vector,
+          nextMerges,
+          nextSettings.vector.smoothness,
+          nextSettings.vector.snapToPms,
+          nextOverrides,
+        )
+        startTransition(() => {
+          setResult((prev) => {
+            if (!prev) return prev
+            URL.revokeObjectURL(prev.vector.svgUrl)
+            return { ...prev, vector }
+          })
+          setViewMode('vector')
+        })
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Palette update failed')
+      } finally {
+        setBusy(false)
+      }
+    },
+    [result, settings],
+  )
+
   const runPipeline = useCallback(
     async (
       image: HTMLImageElement,
       nextSettings: DualOutputSettings,
       nextMerges: Array<[number, number]>,
+      nextOverrides: PmsOverrides,
     ) => {
       setBusy(true)
       setError(null)
       try {
         await new Promise((r) => setTimeout(r, 16))
-        const next = await createDualOutputs(image, nextSettings, nextMerges)
+        const next = await createDualOutputs(
+          image,
+          nextSettings,
+          nextMerges,
+          nextOverrides,
+        )
         startTransition(() => {
           setResult((prev) => {
             revokeDualUrls(prev)
@@ -73,6 +118,7 @@ export default function App() {
     setSourceImage(image)
     setSourceName(name)
     setMerges([])
+    setPmsOverrides({})
   }, [])
 
   const onFile = useCallback(
@@ -83,7 +129,7 @@ export default function App() {
         const url = URL.createObjectURL(file)
         setSource(img, url, file.name.replace(/\.[^.]+$/, '') || 'artwork')
         setSourceMode('upload')
-        await runPipeline(img, settings, [])
+        await runPipeline(img, settings, [], {})
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Could not load image')
       }
@@ -99,7 +145,7 @@ export default function App() {
         const gen = await generateAiImage({ prompt })
         setSource(gen.image, gen.objectUrl, slugify(prompt))
         setSourceMode('ai')
-        await runPipeline(gen.image, settings, [])
+        await runPipeline(gen.image, settings, [], {})
       } catch (err) {
         setBusy(false)
         setError(err instanceof Error ? err.message : 'Generation failed')
@@ -111,36 +157,25 @@ export default function App() {
   const onApply = useCallback(() => {
     if (!sourceImage) return
     setMerges([])
-    void runPipeline(sourceImage, settings, [])
+    setPmsOverrides({})
+    void runPipeline(sourceImage, settings, [], {})
   }, [runPipeline, settings, sourceImage])
 
   const onMergesChange = useCallback(
     async (nextMerges: Array<[number, number]>) => {
       setMerges(nextMerges)
-      if (!result) return
-      setBusy(true)
-      setError(null)
-      try {
-        const vector = await remergeVector(
-          result.vector,
-          nextMerges,
-          settings.vector.smoothness,
-        )
-        startTransition(() => {
-          setResult((prev) => {
-            if (!prev) return prev
-            URL.revokeObjectURL(prev.vector.svgUrl)
-            return { ...prev, vector }
-          })
-          setViewMode('vector')
-        })
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Merge failed')
-      } finally {
-        setBusy(false)
-      }
+      await refreshVector(nextMerges, pmsOverrides)
     },
-    [result, settings.vector.smoothness],
+    [pmsOverrides, refreshVector],
+  )
+
+  const onOverridePms = useCallback(
+    async (paletteIndex: number, pmsCode: string) => {
+      const next = { ...pmsOverrides, [paletteIndex]: pmsCode }
+      setPmsOverrides(next)
+      await refreshVector(merges, next)
+    },
+    [merges, pmsOverrides, refreshVector],
   )
 
   const downloadOutline = useCallback(() => {
@@ -157,7 +192,8 @@ export default function App() {
     if (busy || isPending) return 'Building stroke outline and color vector…'
     if (error) return error
     if (!result) return 'Upload an image or generate one with AI'
-    return `Outline PNG · Vector ${result.vector.palette.length} colors · ${result.vector.regionCount} shapes`
+    const pmsCount = result.vector.palette.filter((c) => c.pmsCode).length
+    return `Outline PNG · ${result.vector.palette.length} fills · ${pmsCount} PMS · ${result.vector.regionCount} shapes`
   }, [busy, error, isPending, result])
 
   return (
@@ -165,8 +201,8 @@ export default function App() {
       <header className="hero">
         <h1 className="brand">Mosaic Image Creator</h1>
         <p className="lede">
-          Upload or generate artwork, then get two outputs: a transparent stroke-outline PNG
-          and a flat-color vector SVG with adjustable — and mergeable — color counts.
+          Upload or generate artwork for soft enamel pins, then get two outputs: a transparent
+          stroke-outline PNG and a flat-color vector SVG snapped to a pin-ready PMS chart.
         </p>
       </header>
 
@@ -204,11 +240,20 @@ export default function App() {
             disabled={busy}
           />
 
+          <button
+            type="button"
+            className="btn btn-secondary chart-btn"
+            onClick={() => setChartOpen(true)}
+          >
+            Browse PMS chart ({getPmsChartSize()})
+          </button>
+
           {result && (
             <PaletteMerge
               palette={result.vector.palette}
               merges={merges}
               onChangeMerges={onMergesChange}
+              onOverridePms={onOverridePms}
               disabled={busy}
             />
           )}
@@ -280,6 +325,13 @@ export default function App() {
           />
         </section>
       </div>
+
+      <PmsChartModal
+        open={chartOpen}
+        title="Enamel pin PMS chart"
+        onClose={() => setChartOpen(false)}
+        onPick={() => setChartOpen(false)}
+      />
     </div>
   )
 }

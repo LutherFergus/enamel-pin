@@ -1,5 +1,6 @@
 import { extractColorContours, pathToSvgD, simplifyPath, smoothPath } from './contours'
 import type { Point } from './contours'
+import { findPmsByCode, nearestPms, snapPaletteToPms } from './pms'
 import { denoiseLabels, extractPalette, quantizeImage } from './quantize'
 import { labelRegions, mergeSmallRegions } from './regions'
 import type { PaletteColor, Rgb } from './types'
@@ -11,6 +12,8 @@ export type ColorVectorSettings = {
   minRegionRatio: number
   smoothness: number
   maxDim: number
+  /** Snap fills to nearest Pantone Solid Coated (PMS) colors. */
+  snapToPms: boolean
 }
 
 export const DEFAULT_COLOR_VECTOR_SETTINGS: ColorVectorSettings = {
@@ -18,16 +21,18 @@ export const DEFAULT_COLOR_VECTOR_SETTINGS: ColorVectorSettings = {
   minRegionRatio: 0.0004,
   smoothness: 2,
   maxDim: 900,
+  snapToPms: true,
 }
+
+/** Manual per-slot PMS overrides: palette index → PMS code like "185 C". */
+export type PmsOverrides = Record<number, string>
 
 export type ColorVectorState = {
   widthPx: number
   heightPx: number
-  /** Working quantized labels (0xffff = transparent). */
   labels: Uint16Array
-  /** Active palette colors (index matches label values that remain in use). */
+  /** Pre-PMS quantized palette (after merges averaged). */
   palette: Rgb[]
-  /** Optional user merges: source palette index → target palette index. */
   mergeMap: number[]
 }
 
@@ -97,7 +102,6 @@ function buildMergeMap(colorCount: number, merges: Array<[number, number]>): num
 
 function averageMergedPalette(palette: Rgb[], labels: Uint16Array, mergeMap: number[]): Rgb[] {
   const sums = palette.map(() => ({ r: 0, g: 0, b: 0, n: 0 }))
-  // Weight by original palette presence after remap: use palette colors themselves
   for (let i = 0; i < palette.length; i++) {
     const t = mergeMap[i]
     sums[t].r += palette[i].r
@@ -105,7 +109,6 @@ function averageMergedPalette(palette: Rgb[], labels: Uint16Array, mergeMap: num
     sums[t].b += palette[i].b
     sums[t].n += 1
   }
-  // Also weight by pixel frequency for better visual average
   const pix = palette.map(() => ({ r: 0, g: 0, b: 0, n: 0 }))
   for (let i = 0; i < labels.length; i++) {
     const v = labels[i]
@@ -135,42 +138,113 @@ function averageMergedPalette(palette: Rgb[], labels: Uint16Array, mergeMap: num
   })
 }
 
+function resolvePaletteColors(
+  basePalette: Rgb[],
+  usedIndices: number[],
+  snapToPms: boolean,
+  overrides: PmsOverrides,
+): { fillRgb: Rgb[]; meta: PaletteColor[] } {
+  const fillRgb = basePalette.map((c) => ({ ...c }))
+  const meta: PaletteColor[] = basePalette.map((c, index) => ({
+    ...c,
+    hex: rgbToHex(c),
+    index,
+  }))
+
+  if (snapToPms) {
+    const snapped = snapPaletteToPms(basePalette, { unique: true })
+    for (let i = 0; i < basePalette.length; i++) {
+      fillRgb[i] = snapped[i].rgb
+      meta[i] = {
+        ...snapped[i].rgb,
+        hex: snapped[i].match.pms.hex,
+        index: i,
+        pmsCode: snapped[i].match.pms.code,
+        pmsName: snapped[i].match.pms.name,
+        pmsDeltaE: Math.round(snapped[i].match.deltaE * 10) / 10,
+      }
+    }
+  } else {
+    for (let i = 0; i < basePalette.length; i++) {
+      const match = nearestPms(basePalette[i])
+      meta[i] = {
+        ...basePalette[i],
+        hex: rgbToHex(basePalette[i]),
+        index: i,
+        pmsCode: match.pms.code,
+        pmsName: match.pms.name,
+        pmsDeltaE: Math.round(match.deltaE * 10) / 10,
+      }
+    }
+  }
+
+  for (const [key, code] of Object.entries(overrides)) {
+    const index = Number(key)
+    if (!Number.isFinite(index) || index < 0 || index >= basePalette.length) continue
+    const pms = findPmsByCode(code)
+    if (!pms) continue
+    fillRgb[index] = { r: pms.r, g: pms.g, b: pms.b }
+    meta[index] = {
+      r: pms.r,
+      g: pms.g,
+      b: pms.b,
+      hex: pms.hex,
+      index,
+      pmsCode: pms.code,
+      pmsName: pms.name,
+      pmsDeltaE: 0,
+    }
+  }
+
+  // Only return used colors in meta list order
+  const usedMeta = usedIndices
+    .filter((i) => i >= 0 && i < meta.length)
+    .sort((a, b) => a - b)
+    .map((i) => meta[i])
+
+  return { fillRgb, meta: usedMeta }
+}
+
 function stateToSvg(
   labels: Uint16Array,
-  palette: Rgb[],
+  fillRgb: Rgb[],
+  metaByIndex: Map<number, PaletteColor>,
   widthPx: number,
   heightPx: number,
   smoothness: number,
-): { svg: string; palette: PaletteColor[]; regionCount: number } {
+): { svg: string; regionCount: number } {
   const contoursByColor = extractColorContours(labels, widthPx, heightPx)
   const { regions } = labelRegions(labels, widthPx, heightPx)
-  const used = new Set<number>()
+
+  const legend = [...metaByIndex.values()]
+    .map(
+      (c) =>
+        `  ${c.pmsName ?? c.hex} → ${c.hex}${
+          c.pmsDeltaE != null ? ` (ΔE ${c.pmsDeltaE})` : ''
+        }`,
+    )
+    .join('\n')
+
   const parts: string[] = [
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${widthPx} ${heightPx}" width="${widthPx}" height="${heightPx}">`,
+    `<!-- PMS Solid Coated palette\n${legend}\n-->`,
     '<g id="fills">',
   ]
 
   for (const [colorIndex, contours] of contoursByColor) {
-    used.add(colorIndex)
-    const fill = rgbToHex(palette[colorIndex])
+    const fill = rgbToHex(fillRgb[colorIndex])
+    const meta = metaByIndex.get(colorIndex)
+    const pmsAttr = meta?.pmsCode ? ` data-pms="${meta.pmsCode}"` : ''
     for (const contour of contours) {
       const pts = processContour(contour, smoothness)
       const d = pathToSvgD(pts)
       if (!d) continue
-      parts.push(`<path fill="${fill}" stroke="none" d="${d}" />`)
+      parts.push(`<path fill="${fill}" stroke="none"${pmsAttr} d="${d}" />`)
     }
   }
   parts.push('</g></svg>')
 
-  const paletteOut: PaletteColor[] = [...used]
-    .sort((a, b) => a - b)
-    .map((index) => ({ ...palette[index], hex: rgbToHex(palette[index]), index }))
-
-  return {
-    svg: parts.join('\n'),
-    palette: paletteOut,
-    regionCount: regions.length,
-  }
+  return { svg: parts.join('\n'), regionCount: regions.length }
 }
 
 async function packResult(
@@ -194,13 +268,47 @@ async function packResult(
   }
 }
 
+function assemble(
+  labels: Uint16Array,
+  basePalette: Rgb[],
+  widthPx: number,
+  heightPx: number,
+  smoothness: number,
+  snapToPms: boolean,
+  overrides: PmsOverrides,
+  state: ColorVectorState,
+): Promise<ColorVectorResult> {
+  const used = new Set<number>()
+  for (let i = 0; i < labels.length; i++) {
+    if (labels[i] !== 0xffff) used.add(labels[i])
+  }
+  const usedIndices = [...used]
+  const { fillRgb, meta } = resolvePaletteColors(
+    basePalette,
+    usedIndices,
+    snapToPms,
+    overrides,
+  )
+  const metaByIndex = new Map(meta.map((c) => [c.index, c]))
+  const { svg, regionCount } = stateToSvg(
+    labels,
+    fillRgb,
+    metaByIndex,
+    widthPx,
+    heightPx,
+    smoothness,
+  )
+  return packResult(svg, widthPx, heightPx, meta, regionCount, state)
+}
+
 /**
- * Vectorizer.AI-style flat color vectorization.
+ * Vectorizer.AI-style flat color vectorization with optional PMS snapping.
  */
 export async function vectorizeColors(
   source: HTMLImageElement | ImageBitmap,
   settings: ColorVectorSettings,
   merges: Array<[number, number]> = [],
+  overrides: PmsOverrides = {},
 ): Promise<ColorVectorResult> {
   const imageData = scaleToCanvas(source, settings.maxDim)
   const { width, height } = imageData
@@ -218,50 +326,49 @@ export async function vectorizeColors(
   const mergedLabels = applyMergeMap(labels, mergeMap)
   const mergedPalette = averageMergedPalette(palette, labels, mergeMap)
 
-  const { svg, palette: paletteOut, regionCount } = stateToSvg(
+  return assemble(
     mergedLabels,
     mergedPalette,
     width,
     height,
     settings.smoothness,
+    settings.snapToPms,
+    overrides,
+    {
+      widthPx: width,
+      heightPx: height,
+      labels,
+      palette,
+      mergeMap,
+    },
   )
-
-  return packResult(svg, width, height, paletteOut, regionCount, {
-    widthPx: width,
-    heightPx: height,
-    labels,
-    palette,
-    mergeMap,
-  })
 }
 
 /**
- * Re-run SVG assembly after palette merges without re-quantizing.
+ * Re-run SVG assembly after palette merges / PMS overrides without re-quantizing.
  */
 export async function applyPaletteMerges(
   state: ColorVectorState,
   merges: Array<[number, number]>,
   smoothness: number,
+  snapToPms: boolean,
+  overrides: PmsOverrides = {},
 ): Promise<ColorVectorResult> {
   const mergeMap = buildMergeMap(state.palette.length, merges)
   const mergedLabels = applyMergeMap(state.labels, mergeMap)
   const mergedPalette = averageMergedPalette(state.palette, state.labels, mergeMap)
-  const { svg, palette, regionCount } = stateToSvg(
+  return assemble(
     mergedLabels,
     mergedPalette,
     state.widthPx,
     state.heightPx,
     smoothness,
+    snapToPms,
+    overrides,
+    { ...state, mergeMap },
   )
-  return packResult(svg, state.widthPx, state.heightPx, palette, regionCount, {
-    ...state,
-    mergeMap,
-  })
 }
 
-/**
- * Suggest nearest-color pairs to help users lower the color count.
- */
 export function suggestMerges(palette: PaletteColor[]): Array<[number, number, number]> {
   const pairs: Array<[number, number, number]> = []
   for (let i = 0; i < palette.length; i++) {

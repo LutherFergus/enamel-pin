@@ -19,7 +19,16 @@ export type EnamelSettings = {
   smoothness: number
 }
 
-export type PaletteColor = Rgb & { hex: string; index: number }
+export type PaletteColor = Rgb & {
+  hex: string
+  index: number
+  /** Nearest / assigned Pantone Solid Coated code, e.g. "185 C". */
+  pmsCode?: string
+  /** Display label e.g. "PMS 185 C". */
+  pmsName?: string
+  /** ΔE distance from the pre-snap RGB sample to the PMS swatch. */
+  pmsDeltaE?: number
+}
 
 export type VectorizeResult = {
   svg: string

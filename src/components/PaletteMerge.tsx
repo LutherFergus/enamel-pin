@@ -1,18 +1,28 @@
 import { useState } from 'react'
 import type { PaletteColor } from '../lib/types'
+import { PmsChartModal } from './PmsChartModal'
 
 type Props = {
   palette: PaletteColor[]
   merges: Array<[number, number]>
   onChangeMerges: (merges: Array<[number, number]>) => void
+  onOverridePms: (paletteIndex: number, pmsCode: string) => void
   disabled?: boolean
 }
 
 /**
- * Click two swatches to merge them into one color (lowers effective color count).
+ * Merge colors and assign Pantone Solid Coated (PMS) codes per fill.
  */
-export function PaletteMerge({ palette, merges, onChangeMerges, disabled }: Props) {
+export function PaletteMerge({
+  palette,
+  merges,
+  onChangeMerges,
+  onOverridePms,
+  disabled,
+}: Props) {
   const [selected, setSelected] = useState<number | null>(null)
+  const [pickerFor, setPickerFor] = useState<number | null>(null)
+  const [mode, setMode] = useState<'merge' | 'pms'>('pms')
 
   const find = (i: number): number => {
     let cur = i
@@ -29,6 +39,10 @@ export function PaletteMerge({ palette, merges, onChangeMerges, disabled }: Prop
 
   const onSwatch = (index: number) => {
     if (disabled) return
+    if (mode === 'pms') {
+      setPickerFor(index)
+      return
+    }
     if (selected == null) {
       setSelected(index)
       return
@@ -44,8 +58,68 @@ export function PaletteMerge({ palette, merges, onChangeMerges, disabled }: Prop
   return (
     <div className="palette-merge">
       <div className="palette-merge-head">
-        <h2>Merge colors</h2>
-        {merges.length > 0 && (
+        <h2>Palette / PMS</h2>
+        <div className="tabs tiny-tabs" role="tablist">
+          <button
+            type="button"
+            className={`tab ${mode === 'pms' ? 'active' : ''}`}
+            onClick={() => {
+              setMode('pms')
+              setSelected(null)
+            }}
+          >
+            PMS
+          </button>
+          <button
+            type="button"
+            className={`tab ${mode === 'merge' ? 'active' : ''}`}
+            onClick={() => setMode('merge')}
+          >
+            Merge
+          </button>
+        </div>
+      </div>
+
+      <p className="hint">
+        {mode === 'pms'
+          ? 'Click a swatch to pick a Pantone Solid Coated color from the chart.'
+          : selected == null
+            ? 'Click one swatch, then another to combine them.'
+            : 'Click a second swatch to merge into the first.'}
+      </p>
+
+      <div className="palette-list">
+        {palette.map((c) => (
+          <button
+            key={c.index}
+            type="button"
+            className={`palette-row ${selected === c.index ? 'selected' : ''}`}
+            disabled={disabled}
+            onClick={() => onSwatch(c.index)}
+            title={
+              mode === 'pms'
+                ? `Assign PMS for ${c.hex}`
+                : `${c.hex} — click to merge`
+            }
+          >
+            <span className="swatch" style={{ background: c.hex }} />
+            <span className="palette-row-text">
+              <strong>{c.pmsName ?? c.hex}</strong>
+              <em>
+                {c.hex}
+                {c.pmsDeltaE != null && mode === 'pms' ? ` · ΔE ${c.pmsDeltaE}` : ''}
+              </em>
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {mode === 'merge' && merges.length > 0 && (
+        <div className="palette-merge-foot">
+          <p className="status">
+            {merges.length} merge{merges.length === 1 ? '' : 's'} · effective{' '}
+            {new Set(palette.map((c) => find(c.index))).size} colors
+          </p>
           <button
             type="button"
             className="linkish"
@@ -57,32 +131,22 @@ export function PaletteMerge({ palette, merges, onChangeMerges, disabled }: Prop
           >
             Reset merges
           </button>
-        )}
-      </div>
-      <p className="hint">
-        {selected == null
-          ? 'Click one swatch, then another to combine them.'
-          : 'Click a second swatch to merge into the first.'}
-      </p>
-      <div className="palette">
-        {palette.map((c) => (
-          <button
-            key={c.index}
-            type="button"
-            className={`swatch swatch-btn ${selected === c.index ? 'selected' : ''}`}
-            title={`${c.hex} — click to merge`}
-            style={{ background: c.hex }}
-            disabled={disabled}
-            onClick={() => onSwatch(c.index)}
-          />
-        ))}
-      </div>
-      {merges.length > 0 && (
-        <p className="status">
-          {merges.length} merge{merges.length === 1 ? '' : 's'} applied · effective{' '}
-          {new Set(palette.map((c) => find(c.index))).size} colors
-        </p>
+        </div>
       )}
+
+      <PmsChartModal
+        open={pickerFor != null}
+        title={
+          pickerFor != null
+            ? `Assign PMS · slot ${pickerFor + 1}`
+            : 'PMS Solid Coated'
+        }
+        onClose={() => setPickerFor(null)}
+        onPick={(color) => {
+          if (pickerFor == null) return
+          onOverridePms(pickerFor, color.code)
+        }}
+      />
     </div>
   )
 }
