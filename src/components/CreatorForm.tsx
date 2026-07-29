@@ -58,7 +58,7 @@ export function CreatorForm({ busy, onGenerate }: CreatorFormProps) {
     setLocalError(null);
     const trimmed = prompt.trim();
     if (!trimmed) {
-      setLocalError("Describe the mosaic you want to make.");
+      setLocalError("Describe the design you want to make.");
       return;
     }
 
@@ -116,7 +116,7 @@ export function CreatorForm({ busy, onGenerate }: CreatorFormProps) {
         <div className="field">
           <label htmlFor={photoId}>Optional photo</label>
           <p className="field-hint">
-            Turns a photo into a mosaic blanket motif.
+            Turns a photo into a crisp vector motif.
           </p>
           <div className="photo-row">
             <input
@@ -157,7 +157,7 @@ export function CreatorForm({ busy, onGenerate }: CreatorFormProps) {
       {localError ? <p className="form-error">{localError}</p> : null}
 
       <button className="primary-btn" type="submit" disabled={busy}>
-        {busy ? "Weaving mosaic…" : "Create mosaic"}
+        {busy ? "Creating design…" : "Create design"}
       </button>
     </form>
   );

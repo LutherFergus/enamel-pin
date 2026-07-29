@@ -83,7 +83,7 @@ export async function generateMosaicImage(options: {
         prompt: options.prompt,
         n: 1,
         aspect_ratio: "1:1",
-        resolution: "1k",
+        resolution: "2k",
         response_format: "b64_json",
         image: {
           url: options.imageDataUrl,
@@ -95,7 +95,7 @@ export async function generateMosaicImage(options: {
         prompt: options.prompt,
         n: 1,
         aspect_ratio: "1:1",
-        resolution: "1k",
+        resolution: "2k",
         response_format: "b64_json",
       };
 

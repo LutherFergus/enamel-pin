@@ -21,7 +21,7 @@ export function ResultPanel({ item, busy, error }: ResultPanelProps) {
         {busy ? (
           <div className="preview-empty">
             <span className="pulse-dot" aria-hidden="true" />
-            Generating a clean vector mosaic…
+            Generating a crisp vector design…
           </div>
         ) : item ? (
           <>
@@ -50,7 +50,7 @@ export function ResultPanel({ item, busy, error }: ResultPanelProps) {
           </>
         ) : (
           <div className="preview-empty">
-            Your mosaic will appear here — square, flat, and tile-ready.
+            Your design will appear here — crisp, flat, and mosaic-ready.
           </div>
         )}
       </div>

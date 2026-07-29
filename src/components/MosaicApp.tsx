@@ -176,8 +176,8 @@ export function MosaicApp() {
           </div>
           <h1 className="hero-title">Image Creator</h1>
           <p className="hero-lede">
-            Turn a prompt — and an optional photo — into a clean vector mosaic
-            blanket design with 2–5 AI-chosen colors.
+            Turn a prompt — and an optional photo — into a crisp vector design
+            with 2–5 AI-chosen colors, ready to use for mosaics later.
           </p>
           <div className="hero-cta">
             <a className="primary-btn" href="#create">
@@ -195,7 +195,7 @@ export function MosaicApp() {
           <div className="section-head">
             <h2>Design</h2>
             <p>
-              Grok Imagine builds flat, tile-ready patterns for yarn blankets.
+              Grok Imagine builds sharp flat illustrations you can mosaic later.
             </p>
           </div>
           <div className="create-grid">
