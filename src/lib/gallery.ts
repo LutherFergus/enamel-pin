@@ -1,13 +1,52 @@
 import {
+  DEFAULT_ASPECT_RATIO,
+  DEFAULT_BORDER_COMPLEXITY,
+  DEFAULT_BORDER_MODE,
+  DEFAULT_DETAIL_LEVEL,
   GALLERY_MAX_ITEMS,
   GALLERY_STORAGE_KEY,
+  type AspectRatio,
+  type BorderComplexity,
+  type BorderMode,
   type ColorCount,
+  type DetailLevel,
   type GalleryItem,
 } from "./types";
 
 const DB_NAME = "mosaic-image-creator";
 const DB_VERSION = 1;
 const STORE_NAME = "gallery";
+
+function normalizeGalleryItem(item: Partial<GalleryItem> & {
+  id?: string;
+  prompt?: string;
+  colorCount?: ColorCount;
+  imageDataUrl?: string;
+  createdAt?: string;
+}): GalleryItem | null {
+  if (
+    !item.id ||
+    !item.prompt ||
+    !item.colorCount ||
+    !item.imageDataUrl ||
+    !item.createdAt
+  ) {
+    return null;
+  }
+
+  return {
+    id: item.id,
+    prompt: item.prompt,
+    colorCount: item.colorCount,
+    aspectRatio: (item.aspectRatio as AspectRatio) || DEFAULT_ASPECT_RATIO,
+    detailLevel: (item.detailLevel as DetailLevel) || DEFAULT_DETAIL_LEVEL,
+    borderMode: (item.borderMode as BorderMode) || DEFAULT_BORDER_MODE,
+    borderComplexity:
+      (item.borderComplexity as BorderComplexity) || DEFAULT_BORDER_COMPLEXITY,
+    imageDataUrl: item.imageDataUrl,
+    createdAt: item.createdAt,
+  };
+}
 
 function canUseIndexedDb(): boolean {
   return typeof window !== "undefined" && typeof indexedDB !== "undefined";
@@ -114,7 +153,11 @@ async function readAllItems(): Promise<GalleryItem[]> {
       tx.objectStore(STORE_NAME).getAll() as IDBRequest<GalleryItem[]>,
     );
     await transactionDone(tx);
-    return sortNewestFirst(items ?? []).slice(0, GALLERY_MAX_ITEMS);
+    return sortNewestFirst(
+      (items ?? [])
+        .map((item) => normalizeGalleryItem(item))
+        .filter((item): item is GalleryItem => Boolean(item)),
+    ).slice(0, GALLERY_MAX_ITEMS);
   } finally {
     db.close();
   }
@@ -144,6 +187,10 @@ export async function loadGallery(): Promise<GalleryItem[]> {
 export async function addToGallery(input: {
   prompt: string;
   colorCount: ColorCount;
+  aspectRatio: AspectRatio;
+  detailLevel: DetailLevel;
+  borderMode: BorderMode;
+  borderComplexity: BorderComplexity;
   imageDataUrl: string;
 }): Promise<GalleryItem[]> {
   const nextItem: GalleryItem = {
@@ -153,6 +200,10 @@ export async function addToGallery(input: {
         : `mosaic-${Date.now()}`,
     prompt: input.prompt,
     colorCount: input.colorCount,
+    aspectRatio: input.aspectRatio,
+    detailLevel: input.detailLevel,
+    borderMode: input.borderMode,
+    borderComplexity: input.borderComplexity,
     imageDataUrl: input.imageDataUrl,
     createdAt: new Date().toISOString(),
   };

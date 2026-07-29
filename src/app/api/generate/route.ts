@@ -2,9 +2,18 @@ import { NextResponse } from "next/server";
 import { buildMosaicPrompt } from "@/lib/prompt";
 import { generateMosaicImage } from "@/lib/xai";
 import {
+  ASPECT_RATIO_OPTIONS,
   COLOR_COUNT_OPTIONS,
+  DEFAULT_ASPECT_RATIO,
+  DEFAULT_BORDER_COMPLEXITY,
+  DEFAULT_BORDER_MODE,
   DEFAULT_COLOR_COUNT,
+  DEFAULT_DETAIL_LEVEL,
+  type AspectRatio,
+  type BorderComplexity,
+  type BorderMode,
   type ColorCount,
+  type DetailLevel,
   type GenerateResponse,
 } from "@/lib/types";
 
@@ -14,6 +23,10 @@ export const maxDuration = 60;
 type Body = {
   prompt?: unknown;
   colorCount?: unknown;
+  aspectRatio?: unknown;
+  detailLevel?: unknown;
+  borderMode?: unknown;
+  borderComplexity?: unknown;
   imageDataUrl?: unknown;
   apiKey?: unknown;
 };
@@ -36,6 +49,25 @@ function isColorCount(value: unknown): value is ColorCount {
     typeof value === "number" &&
     COLOR_COUNT_OPTIONS.includes(value as ColorCount)
   );
+}
+
+function isAspectRatio(value: unknown): value is AspectRatio {
+  return (
+    typeof value === "string" &&
+    ASPECT_RATIO_OPTIONS.includes(value as AspectRatio)
+  );
+}
+
+function isDetailLevel(value: unknown): value is DetailLevel {
+  return value === "simple" || value === "detailed";
+}
+
+function isBorderMode(value: unknown): value is BorderMode {
+  return value === "none" || value === "border";
+}
+
+function isBorderComplexity(value: unknown): value is BorderComplexity {
+  return value === "simple" || value === "complex";
 }
 
 function isDataUrl(value: unknown): value is string {
@@ -68,6 +100,18 @@ export async function POST(request: Request) {
     const colorCount = isColorCount(body.colorCount)
       ? body.colorCount
       : DEFAULT_COLOR_COUNT;
+    const aspectRatio = isAspectRatio(body.aspectRatio)
+      ? body.aspectRatio
+      : DEFAULT_ASPECT_RATIO;
+    const detailLevel = isDetailLevel(body.detailLevel)
+      ? body.detailLevel
+      : DEFAULT_DETAIL_LEVEL;
+    const borderMode = isBorderMode(body.borderMode)
+      ? body.borderMode
+      : DEFAULT_BORDER_MODE;
+    const borderComplexity = isBorderComplexity(body.borderComplexity)
+      ? body.borderComplexity
+      : DEFAULT_BORDER_COMPLEXITY;
 
     const imageDataUrl = isDataUrl(body.imageDataUrl)
       ? body.imageDataUrl
@@ -90,15 +134,20 @@ export async function POST(request: Request) {
       );
     }
 
-    const promptUsed = buildMosaicPrompt(
-      prompt,
+    const promptUsed = buildMosaicPrompt({
+      userPrompt: prompt,
       colorCount,
-      Boolean(imageDataUrl),
-    );
+      aspectRatio,
+      detailLevel,
+      borderMode,
+      borderComplexity: borderMode === "border" ? borderComplexity : "simple",
+      hasReferenceImage: Boolean(imageDataUrl),
+    });
 
     const result = await generateMosaicImage({
       prompt: promptUsed,
       imageDataUrl,
+      aspectRatio,
       apiKey: readApiKey(request, body),
     });
 
@@ -109,6 +158,10 @@ export async function POST(request: Request) {
         : "image/png",
       promptUsed,
       colorCount,
+      aspectRatio,
+      detailLevel,
+      borderMode,
+      borderComplexity: borderMode === "border" ? borderComplexity : "simple",
     };
 
     return NextResponse.json(payload);

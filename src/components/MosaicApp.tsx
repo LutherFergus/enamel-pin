@@ -20,8 +20,8 @@ import {
   toPngDataUrl,
 } from "@/lib/gallery";
 import type {
-  ColorCount,
   GalleryItem,
+  GenerateOptions,
   GenerateResponse,
 } from "@/lib/types";
 
@@ -71,11 +71,7 @@ export function MosaicApp() {
     setKeyModalOpen(true);
   }
 
-  async function handleGenerate(input: {
-    prompt: string;
-    colorCount: ColorCount;
-    imageDataUrl?: string;
-  }) {
+  async function handleGenerate(input: GenerateOptions) {
     setError(null);
 
     const key = apiKey.trim() || loadApiKey();
@@ -116,6 +112,10 @@ export function MosaicApp() {
       const next = await addToGallery({
         prompt: input.prompt,
         colorCount: payload.colorCount,
+        aspectRatio: payload.aspectRatio,
+        detailLevel: payload.detailLevel,
+        borderMode: payload.borderMode,
+        borderComplexity: payload.borderComplexity,
         imageDataUrl,
       });
 

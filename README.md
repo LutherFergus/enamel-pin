@@ -5,11 +5,13 @@ Next.js app that turns a text prompt (and an optional photo) into **clean vector
 ## Features (v1)
 
 - Asks for your **xAI API key** in the browser (saved locally; Change/Clear anytime)
-- Text prompt + optional reference photo
+- Short subject prompt — backend expands it into a full house-style brief
+- Orientation + proportions (square / landscape / portrait ratios)
+- **Simple / Detailed**, **Border / No border**, and border **Simple / Complex**
+- Optional reference photo
 - AI-chosen palette of **2–5 colors** (default **2**)
-- Flat vector / graphghan-friendly mosaic look
-- **PNG download** for each design
-- Browser gallery stored in `localStorage`, capped at **50** designs
+- Crisp flat vector look (not pixel/tile art), 2k PNG download
+- Browser gallery in IndexedDB, capped at **50** designs
 - Ready for **Netlify** deploy (optional server-side `XAI_API_KEY`)
 
 ## Stack
@@ -71,10 +73,10 @@ npx netlify dev
 ## Usage
 
 1. Enter your xAI API key when prompted (or use **Change** in the header later).
-2. Describe a motif in the prompt (e.g. “sleepy fox under a crescent moon”).
-3. Pick how many colors the AI should use (2–5).
-4. Optionally upload a photo to convert into a mosaic blanket motif.
-5. Click **Create mosaic**, then **Download PNG**.
+2. Type a short subject (e.g. `sleepy fox`) — you do not need a long prompt.
+3. Pick orientation + proportion, detail, border options, and color count.
+4. Optionally upload a photo to convert into a crisp vector motif.
+5. Click **Create design**, then **Download PNG**.
 6. Browse past designs in the on-device gallery (max 50; oldest drop off).
 
 ## Scripts

@@ -68,10 +68,12 @@ async function parseXaiResponse(response: Response): Promise<XaiImageResult> {
 export async function generateMosaicImage(options: {
   prompt: string;
   imageDataUrl?: string;
+  aspectRatio?: string;
   apiKey?: string | null;
 }): Promise<XaiImageResult> {
   const apiKey = resolveApiKey(options.apiKey);
   const hasImage = Boolean(options.imageDataUrl);
+  const aspectRatio = options.aspectRatio || "1:1";
 
   const endpoint = hasImage
     ? `${XAI_BASE_URL}/images/edits`
@@ -82,7 +84,7 @@ export async function generateMosaicImage(options: {
         model: MODEL,
         prompt: options.prompt,
         n: 1,
-        aspect_ratio: "1:1",
+        aspect_ratio: aspectRatio,
         resolution: "2k",
         response_format: "b64_json",
         image: {
@@ -94,7 +96,7 @@ export async function generateMosaicImage(options: {
         model: MODEL,
         prompt: options.prompt,
         n: 1,
-        aspect_ratio: "1:1",
+        aspect_ratio: aspectRatio,
         resolution: "2k",
         response_format: "b64_json",
       };

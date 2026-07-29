@@ -9,6 +9,14 @@ type ResultPanelProps = {
   error: string | null;
 };
 
+function settingsLabel(item: GalleryItem): string {
+  const border =
+    item.borderMode === "border"
+      ? `border · ${item.borderComplexity}`
+      : "no border";
+  return `${item.aspectRatio} · ${item.detailLevel} · ${border} · ${item.colorCount} colors`;
+}
+
 export function ResultPanel({ item, busy, error }: ResultPanelProps) {
   return (
     <section className="result-panel" aria-live="polite">
@@ -29,18 +37,18 @@ export function ResultPanel({ item, busy, error }: ResultPanelProps) {
             <img
               className="preview-image"
               src={item.imageDataUrl}
-              alt={`Mosaic design: ${item.prompt}`}
+              alt={`Design: ${item.prompt}`}
             />
             <div className="preview-meta">
               <p className="preview-prompt">{item.prompt}</p>
-              <p className="preview-colors">{item.colorCount} colors</p>
+              <p className="preview-colors">{settingsLabel(item)}</p>
               <button
                 type="button"
                 className="secondary-btn"
                 onClick={() =>
                   downloadPng(
                     item.imageDataUrl,
-                    `mosaic-${item.colorCount}c-${item.id.slice(0, 8)}.png`,
+                    `mosaic-${item.aspectRatio.replace(":", "x")}-${item.id.slice(0, 8)}.png`,
                   )
                 }
               >

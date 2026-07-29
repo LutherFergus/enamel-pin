@@ -264,7 +264,7 @@ input[type="text"] {
 
 textarea {
   resize: vertical;
-  min-height: 7.5rem;
+  min-height: 5.5rem;
 }
 
 textarea:focus,
@@ -275,6 +275,12 @@ input[type="text"]:focus {
 }
 
 .color-pills {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.option-pills {
   display: flex;
   gap: 0.5rem;
   flex-wrap: wrap;
@@ -291,11 +297,25 @@ input[type="text"]:focus {
   transition: transform 160ms ease, background 160ms ease, color 160ms ease;
 }
 
-.color-pill:hover:not(:disabled) {
+.option-pill {
+  min-height: 2.6rem;
+  padding: 0.45rem 0.85rem;
+  border-radius: 12px;
+  border: 1px solid rgba(20, 32, 28, 0.14);
+  background: rgba(255, 255, 255, 0.75);
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 600;
+  transition: transform 160ms ease, background 160ms ease, color 160ms ease;
+}
+
+.color-pill:hover:not(:disabled),
+.option-pill:hover:not(:disabled) {
   transform: translateY(-1px);
 }
 
-.color-pill.is-active {
+.color-pill.is-active,
+.option-pill.is-active {
   background: var(--teal);
   border-color: var(--teal-deep);
   color: #f4faf7;
@@ -405,7 +425,8 @@ input[type="text"]:focus {
 
 .preview-image {
   width: min(100%, 420px);
-  aspect-ratio: 1;
+  max-height: 520px;
+  aspect-ratio: auto;
   object-fit: contain;
   border-radius: 12px;
   background: #fff;
