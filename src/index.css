@@ -371,6 +371,19 @@ img {
   color: var(--accent-deep);
 }
 
+.chip-on {
+  border-color: var(--accent);
+  background: rgba(15, 110, 86, 0.12);
+  color: var(--accent-deep);
+}
+
+.theme-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 0.75rem;
+}
+
 .palette-merge {
   margin-top: 0.35rem;
   padding-top: 0.25rem;

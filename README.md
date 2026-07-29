@@ -1,6 +1,8 @@
-# Mosaic Image Creator
+# Enamel Pin Creator
 
-Turn uploaded or AI-generated artwork into soft enamel pin–ready assets:
+Standalone soft enamel pin artwork tool.
+
+Turn uploaded or AI-generated artwork into pin-ready assets:
 
 1. **Stroke outline PNG** — line art only, transparent background
 2. **Color vector SVG** — flat-color vectorization with adjustable color count, palette merging, and a curated **~150-color PMS Solid Coated** chart for enamel fills
@@ -30,4 +32,4 @@ npm run preview
 
 ## PMS chart
 
-[`src/data/pms-enamel.json`](src/data/pms-enamel.json) holds ~150 Pantone Solid Coated approximations commonly used for soft enamel pin fills (process colors, neutrals, reds/pinks, blues, greens, pastels, earth tones). Digital RGB/LAB only — always verify against a physical PMS book before production.
+[`src/data/pms-enamel.json`](src/data/pms-enamel.json) holds ~150 Pantone Solid Coated approximations commonly used for soft enamel pin fills. Digital RGB/LAB only — always verify against a physical PMS book before production.

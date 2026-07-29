@@ -5,7 +5,7 @@ import { Dropzone } from './components/Dropzone'
 import { PaletteMerge } from './components/PaletteMerge'
 import { PmsChartModal } from './components/PmsChartModal'
 import { Preview, type PreviewTab } from './components/Preview'
-import { generateAiImage } from './lib/aiGenerate'
+import { generateAiImage, type PinheadsTheme } from './lib/aiGenerate'
 import type { PmsOverrides } from './lib/colorVectorize'
 import {
   createDualOutputs,
@@ -138,11 +138,11 @@ export default function App() {
   )
 
   const onGenerate = useCallback(
-    async (prompt: string) => {
+    async (prompt: string, themes: PinheadsTheme[]) => {
       setBusy(true)
       setError(null)
       try {
-        const gen = await generateAiImage({ prompt })
+        const gen = await generateAiImage({ prompt, themes })
         setSource(gen.image, gen.objectUrl, slugify(prompt))
         setSourceMode('ai')
         await runPipeline(gen.image, settings, [], {})
@@ -199,7 +199,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="hero">
-        <h1 className="brand">Mosaic Image Creator</h1>
+        <h1 className="brand">Enamel Pin Creator</h1>
         <p className="lede">
           Upload or generate artwork for soft enamel pins, then get two outputs: a transparent
           stroke-outline PNG and a flat-color vector SVG snapped to a pin-ready PMS chart.
