@@ -51,6 +51,7 @@ export function Gallery({ items, onSelect, onRemove, onClear }: GalleryProps) {
                   <span className="gallery-caption-prompt">{item.prompt}</span>
                   <span className="gallery-caption-meta">
                     {item.aspectRatio} · {item.detailLevel} ·{" "}
+                    {item.backgroundMode === "themed" ? "bg" : "no bg"} ·{" "}
                     {item.colorCount} colors ·{" "}
                     {new Date(item.createdAt).toLocaleDateString()}
                   </span>

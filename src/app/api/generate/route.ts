@@ -5,11 +5,13 @@ import {
   ASPECT_RATIO_OPTIONS,
   COLOR_COUNT_OPTIONS,
   DEFAULT_ASPECT_RATIO,
+  DEFAULT_BACKGROUND_MODE,
   DEFAULT_BORDER_COMPLEXITY,
   DEFAULT_BORDER_MODE,
   DEFAULT_COLOR_COUNT,
   DEFAULT_DETAIL_LEVEL,
   type AspectRatio,
+  type BackgroundMode,
   type BorderComplexity,
   type BorderMode,
   type ColorCount,
@@ -27,6 +29,7 @@ type Body = {
   detailLevel?: unknown;
   borderMode?: unknown;
   borderComplexity?: unknown;
+  backgroundMode?: unknown;
   imageDataUrl?: unknown;
   apiKey?: unknown;
 };
@@ -68,6 +71,10 @@ function isBorderMode(value: unknown): value is BorderMode {
 
 function isBorderComplexity(value: unknown): value is BorderComplexity {
   return value === "simple" || value === "complex";
+}
+
+function isBackgroundMode(value: unknown): value is BackgroundMode {
+  return value === "none" || value === "themed";
 }
 
 function isDataUrl(value: unknown): value is string {
@@ -112,6 +119,9 @@ export async function POST(request: Request) {
     const borderComplexity = isBorderComplexity(body.borderComplexity)
       ? body.borderComplexity
       : DEFAULT_BORDER_COMPLEXITY;
+    const backgroundMode = isBackgroundMode(body.backgroundMode)
+      ? body.backgroundMode
+      : DEFAULT_BACKGROUND_MODE;
 
     const imageDataUrl = isDataUrl(body.imageDataUrl)
       ? body.imageDataUrl
@@ -134,13 +144,17 @@ export async function POST(request: Request) {
       );
     }
 
+    const resolvedBorderComplexity =
+      borderMode === "border" ? borderComplexity : "simple";
+
     const promptUsed = buildMosaicPrompt({
       userPrompt: prompt,
       colorCount,
       aspectRatio,
       detailLevel,
       borderMode,
-      borderComplexity: borderMode === "border" ? borderComplexity : "simple",
+      borderComplexity: resolvedBorderComplexity,
+      backgroundMode,
       hasReferenceImage: Boolean(imageDataUrl),
     });
 
@@ -161,7 +175,8 @@ export async function POST(request: Request) {
       aspectRatio,
       detailLevel,
       borderMode,
-      borderComplexity: borderMode === "border" ? borderComplexity : "simple",
+      borderComplexity: resolvedBorderComplexity,
+      backgroundMode,
     };
 
     return NextResponse.json(payload);

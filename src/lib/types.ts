@@ -19,6 +19,8 @@ export type BorderMode = "none" | "border";
 
 export type BorderComplexity = "simple" | "complex";
 
+export type BackgroundMode = "none" | "themed";
+
 export interface GenerateOptions {
   prompt: string;
   colorCount: ColorCount;
@@ -26,6 +28,7 @@ export interface GenerateOptions {
   detailLevel: DetailLevel;
   borderMode: BorderMode;
   borderComplexity: BorderComplexity;
+  backgroundMode: BackgroundMode;
   imageDataUrl?: string;
 }
 
@@ -38,6 +41,7 @@ export interface GenerateResponse {
   detailLevel: DetailLevel;
   borderMode: BorderMode;
   borderComplexity: BorderComplexity;
+  backgroundMode: BackgroundMode;
 }
 
 export interface GalleryItem {
@@ -48,6 +52,7 @@ export interface GalleryItem {
   detailLevel: DetailLevel;
   borderMode: BorderMode;
   borderComplexity: BorderComplexity;
+  backgroundMode: BackgroundMode;
   imageDataUrl: string;
   createdAt: string;
 }
@@ -62,6 +67,7 @@ export const DEFAULT_ORIENTATION: Orientation = "square";
 export const DEFAULT_DETAIL_LEVEL: DetailLevel = "simple";
 export const DEFAULT_BORDER_MODE: BorderMode = "none";
 export const DEFAULT_BORDER_COMPLEXITY: BorderComplexity = "simple";
+export const DEFAULT_BACKGROUND_MODE: BackgroundMode = "none";
 
 export const ASPECT_RATIO_OPTIONS: AspectRatio[] = [
   "1:1",

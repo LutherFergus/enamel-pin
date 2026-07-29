@@ -1,11 +1,13 @@
 import {
   DEFAULT_ASPECT_RATIO,
+  DEFAULT_BACKGROUND_MODE,
   DEFAULT_BORDER_COMPLEXITY,
   DEFAULT_BORDER_MODE,
   DEFAULT_DETAIL_LEVEL,
   GALLERY_MAX_ITEMS,
   GALLERY_STORAGE_KEY,
   type AspectRatio,
+  type BackgroundMode,
   type BorderComplexity,
   type BorderMode,
   type ColorCount,
@@ -43,6 +45,8 @@ function normalizeGalleryItem(item: Partial<GalleryItem> & {
     borderMode: (item.borderMode as BorderMode) || DEFAULT_BORDER_MODE,
     borderComplexity:
       (item.borderComplexity as BorderComplexity) || DEFAULT_BORDER_COMPLEXITY,
+    backgroundMode:
+      (item.backgroundMode as BackgroundMode) || DEFAULT_BACKGROUND_MODE,
     imageDataUrl: item.imageDataUrl,
     createdAt: item.createdAt,
   };
@@ -191,6 +195,7 @@ export async function addToGallery(input: {
   detailLevel: DetailLevel;
   borderMode: BorderMode;
   borderComplexity: BorderComplexity;
+  backgroundMode: BackgroundMode;
   imageDataUrl: string;
 }): Promise<GalleryItem[]> {
   const nextItem: GalleryItem = {
@@ -204,6 +209,7 @@ export async function addToGallery(input: {
     detailLevel: input.detailLevel,
     borderMode: input.borderMode,
     borderComplexity: input.borderComplexity,
+    backgroundMode: input.backgroundMode,
     imageDataUrl: input.imageDataUrl,
     createdAt: new Date().toISOString(),
   };

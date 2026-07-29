@@ -14,7 +14,9 @@ function settingsLabel(item: GalleryItem): string {
     item.borderMode === "border"
       ? `border · ${item.borderComplexity}`
       : "no border";
-  return `${item.aspectRatio} · ${item.detailLevel} · ${border} · ${item.colorCount} colors`;
+  const background =
+    item.backgroundMode === "themed" ? "themed bg" : "no bg";
+  return `${item.aspectRatio} · ${item.detailLevel} · ${background} · ${border} · ${item.colorCount} colors`;
 }
 
 export function ResultPanel({ item, busy, error }: ResultPanelProps) {

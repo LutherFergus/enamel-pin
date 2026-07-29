@@ -5,12 +5,12 @@ Next.js app that turns a text prompt (and an optional photo) into **clean vector
 ## Features (v1)
 
 - Asks for your **xAI API key** in the browser (saved locally; Change/Clear anytime)
-- Short subject prompt — backend expands it into a full house-style brief
+- Short subject prompt — a **mosaic brain** expands it and enforces stitch-feasible rules
 - Orientation + proportions (square / landscape / portrait ratios)
-- **Simple / Detailed**, **Border / No border**, and border **Simple / Complex**
+- **Simple / Detailed**, **Background / No background**, **Border / No border**, border **Simple / Complex**
 - Optional reference photo
 - AI-chosen palette of **2–5 colors** (default **2**)
-- Crisp flat vector look (not pixel/tile art), 2k PNG download
+- Exclusive output: mosaic-blanket-ready crisp flat vector art (2k PNG)
 - Browser gallery in IndexedDB, capped at **50** designs
 - Ready for **Netlify** deploy (optional server-side `XAI_API_KEY`)
 
@@ -74,7 +74,7 @@ npx netlify dev
 
 1. Enter your xAI API key when prompted (or use **Change** in the header later).
 2. Type a short subject (e.g. `sleepy fox`) — you do not need a long prompt.
-3. Pick orientation + proportion, detail, border options, and color count.
+3. Pick orientation + proportion, detail, background, border options, and color count.
 4. Optionally upload a photo to convert into a crisp vector motif.
 5. Click **Create design**, then **Download PNG**.
 6. Browse past designs in the on-device gallery (max 50; oldest drop off).
@@ -104,10 +104,11 @@ src/
     ResultPanel.tsx
     Gallery.tsx
   lib/
+    mosaic-brain/           # Stitch-feasibility engine + theme knowledge
     xai.ts                  # xAI client
     apiKey.ts               # localStorage API key helpers
     prompt.ts               # Mosaic style prompt builder
-    gallery.ts              # localStorage gallery helpers
+    gallery.ts              # IndexedDB gallery helpers
     types.ts
 netlify.toml
 .env.example
@@ -116,6 +117,7 @@ netlify.toml
 ## Notes
 
 - On first visit (or after Clear), the UI asks for your xAI API key and stores it in `localStorage`.
+- The mosaic brain checks every option against yarn/graphghan limits (large shapes, limited colors, no tiny border icons) and injects those rules into the Imagine prompt.
 - Generated images are requested as `b64_json` so PNG download and gallery storage work without relying on temporary xAI URLs.
 - Reference photos are resized client-side before upload to keep payloads modest.
 - The gallery never leaves the user’s browser (IndexedDB; max 50 designs).

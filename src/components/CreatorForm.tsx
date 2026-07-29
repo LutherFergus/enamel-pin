@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { evaluateMosaicDesign } from "@/lib/mosaic-brain";
 import { fileToResizedDataUrl } from "@/lib/gallery";
 import {
   COLOR_COUNT_OPTIONS,
   DEFAULT_ASPECT_RATIO,
+  DEFAULT_BACKGROUND_MODE,
   DEFAULT_BORDER_COMPLEXITY,
   DEFAULT_BORDER_MODE,
   DEFAULT_COLOR_COUNT,
@@ -15,6 +17,7 @@ import {
   defaultAspectForOrientation,
   orientationForAspect,
   type AspectRatio,
+  type BackgroundMode,
   type BorderComplexity,
   type BorderMode,
   type ColorCount,
@@ -86,6 +89,9 @@ export function CreatorForm({ busy, onGenerate }: CreatorFormProps) {
   const [borderComplexity, setBorderComplexity] = useState<BorderComplexity>(
     DEFAULT_BORDER_COMPLEXITY,
   );
+  const [backgroundMode, setBackgroundMode] = useState<BackgroundMode>(
+    DEFAULT_BACKGROUND_MODE,
+  );
   const [photoName, setPhotoName] = useState<string | null>(null);
   const [photoDataUrl, setPhotoDataUrl] = useState<string | undefined>();
   const [localError, setLocalError] = useState<string | null>(null);
@@ -138,9 +144,22 @@ export function CreatorForm({ busy, onGenerate }: CreatorFormProps) {
       borderMode,
       borderComplexity:
         borderMode === "border" ? borderComplexity : DEFAULT_BORDER_COMPLEXITY,
+      backgroundMode,
       imageDataUrl: photoDataUrl,
     });
   }
+
+  const brain = evaluateMosaicDesign({
+    subject: prompt.trim() || "subject",
+    colorCount,
+    aspectRatio,
+    detailLevel,
+    borderMode,
+    borderComplexity:
+      borderMode === "border" ? borderComplexity : DEFAULT_BORDER_COMPLEXITY,
+    backgroundMode,
+    hasReferenceImage: Boolean(photoDataUrl),
+  });
 
   return (
     <form className="creator-form" onSubmit={handleSubmit}>
@@ -199,6 +218,20 @@ export function CreatorForm({ busy, onGenerate }: CreatorFormProps) {
           onChange={setDetailLevel}
         />
         <OptionGroup
+          label="Background"
+          hint="None keeps the subject alone. Themed adds a few large related shapes."
+          value={backgroundMode}
+          options={[
+            { value: "none", label: "No background" },
+            { value: "themed", label: "Background" },
+          ]}
+          disabled={busy}
+          onChange={setBackgroundMode}
+        />
+      </div>
+
+      <div className="field-row">
+        <OptionGroup
           label="Border"
           value={borderMode}
           options={[
@@ -208,21 +241,36 @@ export function CreatorForm({ busy, onGenerate }: CreatorFormProps) {
           disabled={busy}
           onChange={setBorderMode}
         />
+        {borderMode === "border" ? (
+          <OptionGroup
+            label="Border artwork"
+            hint="Large stitch-readable motifs only."
+            value={borderComplexity}
+            options={[
+              { value: "simple", label: "Simple" },
+              { value: "complex", label: "Complex" },
+            ]}
+            disabled={busy}
+            onChange={setBorderComplexity}
+          />
+        ) : (
+          <div className="field" aria-hidden="true" />
+        )}
       </div>
 
-      {borderMode === "border" ? (
-        <OptionGroup
-          label="Border artwork"
-          hint="How much ornament fills the border. Motifs stay large and stitch-readable."
-          value={borderComplexity}
-          options={[
-            { value: "simple", label: "Simple" },
-            { value: "complex", label: "Complex" },
-          ]}
-          disabled={busy}
-          onChange={setBorderComplexity}
-        />
-      ) : null}
+      <div className={`brain-note is-${brain.preference}`} role="status">
+        <p className="brain-note-title">
+          Mosaic brain · {brain.preference === "ideal"
+            ? "great for yarn"
+            : brain.preference === "ok"
+              ? "workable"
+              : "busy for stitches"}
+        </p>
+        <p className="brain-note-body">
+          {brain.notes[0] ??
+            "Designs stay large, flat, and high-contrast so they chart into a blanket."}
+        </p>
+      </div>
 
       <div className="field-row">
         <div className="field">

@@ -1,5 +1,7 @@
+import { evaluateMosaicDesign } from "@/lib/mosaic-brain";
 import type {
   AspectRatio,
+  BackgroundMode,
   BorderComplexity,
   BorderMode,
   ColorCount,
@@ -13,6 +15,7 @@ export type PromptBuildInput = {
   detailLevel: DetailLevel;
   borderMode: BorderMode;
   borderComplexity: BorderComplexity;
+  backgroundMode: BackgroundMode;
   hasReferenceImage: boolean;
 };
 
@@ -26,16 +29,16 @@ function colorInstruction(colorCount: ColorCount): string {
 function detailInstruction(detailLevel: DetailLevel): string {
   if (detailLevel === "simple") {
     return [
-      "Detail level: SIMPLE.",
+      "Detail level: SIMPLE (preferred for mosaic blankets).",
       "One clear focal subject, large bold silhouettes, almost no secondary ornament.",
       "Prefer big readable shapes and generous negative space. No tiny linework.",
     ].join(" ");
   }
 
   return [
-    "Detail level: DETAILED.",
-    "A richer scene with a few supporting large shapes around the subject.",
-    "Still stitch-scale: every added element must be big and bold — more content, not finer detail, not tiny patterns.",
+    "Detail level: DETAILED — still stitch-scale.",
+    "A richer scene with only a few supporting LARGE shapes around the subject.",
+    "More content does NOT mean finer detail. No tiny patterns, no busy filler.",
   ].join(" ");
 }
 
@@ -47,7 +50,6 @@ function borderInstruction(
     return [
       "Border: NONE.",
       "No frame, no decorative edge band, no vignette.",
-      "Subject sits on a clean solid background with open margins.",
     ].join(" ");
   }
 
@@ -80,12 +82,43 @@ function borderInstruction(
   ].join(" ");
 }
 
+function backgroundInstruction(
+  backgroundMode: BackgroundMode,
+  motifs: string[],
+): string {
+  if (backgroundMode === "none") {
+    return [
+      "Background: NONE.",
+      "Keep only the main subject (plus border if requested) on a clean solid field.",
+      "Do not add scenery, props, weather, or thematic filler behind the subject.",
+    ].join(" ");
+  }
+
+  return [
+    "Background: THEMED.",
+    "Add a sparse thematic background suggested by the subject — large shapes only.",
+    `Allowed background motifs: ${motifs.join("; ")}.`,
+    "Use at most 1–3 background elements total. They must be oversized, flat, and quieter than the subject.",
+    "No busy landscapes, no tiny distant objects, no textured ground fills.",
+  ].join(" ");
+}
+
 /**
  * Expands a short user subject into a full Imagine prompt.
- * Users should only need a few words; house style carries the quality bar.
+ * The mosaic-brain engine always injects stitch-feasibility constraints.
  */
 export function buildMosaicPrompt(input: PromptBuildInput): string {
   const subject = input.userPrompt.trim();
+  const evaluation = evaluateMosaicDesign({
+    subject,
+    colorCount: input.colorCount,
+    aspectRatio: input.aspectRatio,
+    detailLevel: input.detailLevel,
+    borderMode: input.borderMode,
+    borderComplexity: input.borderComplexity,
+    backgroundMode: input.backgroundMode,
+    hasReferenceImage: input.hasReferenceImage,
+  });
 
   const referenceLine = input.hasReferenceImage
     ? "Reference image provided: use it only for subject identity, pose, and silhouette. Redraw as crisp vector art — not a photo, not a filtered photo. Simplify small photo details into large flat shapes."
@@ -93,19 +126,33 @@ export function buildMosaicPrompt(input: PromptBuildInput): string {
 
   return [
     "You are generating finished artwork for Mosaic Image Creator.",
-    "Output goal: a crisp flat vector illustration designed to be translated later into a mosaic blanket / yarn chart.",
-    "Stitch-scale constraint: every shape must stay large, chunky, and high-contrast. Tiny details will be lost in stitches — do not draw them.",
+    "Exclusive output type: mosaic-blanket-ready flat vector illustration (for later yarn/graphghan charting).",
     "The user prompt may be only a few words. Treat those words as the SUBJECT, then complete a polished illustration without asking for more detail.",
     `Subject: ${subject}`,
     `Canvas aspect ratio: ${input.aspectRatio}. Compose intentionally for this frame.`,
     "House style: clean flat vector art; razor-sharp edges; smooth curves; solid color fills only.",
     "No gradients, textures, grain, noise, shadows, glow, 3D, photorealism, blur, or watercolor.",
     "Do NOT make the image look like a mosaic, pixels, tiles, beads, cross-stitch, graphghan, Lego, embroidery chart, or 8-bit/16-bit pixel art.",
-    "Keep shapes bold and easy to read at a glance. Prefer fewer larger forms over many small ones.",
+    "Keep shapes bold and easy to read at a glance. Prefer fewer larger forms over many small ones. Simple is usually better.",
+    ...evaluation.directives,
     colorInstruction(input.colorCount),
     detailInstruction(input.detailLevel),
     borderInstruction(input.borderMode, input.borderComplexity),
+    backgroundInstruction(input.backgroundMode, evaluation.backgroundMotifs),
     referenceLine,
-    "Deliver one cohesive finished illustration.",
+    "Deliver one cohesive finished illustration that a crocheter could chart into a blanket without losing the idea.",
   ].join(" ");
+}
+
+export function getDesignNotes(input: PromptBuildInput) {
+  return evaluateMosaicDesign({
+    subject: input.userPrompt,
+    colorCount: input.colorCount,
+    aspectRatio: input.aspectRatio,
+    detailLevel: input.detailLevel,
+    borderMode: input.borderMode,
+    borderComplexity: input.borderComplexity,
+    backgroundMode: input.backgroundMode,
+    hasReferenceImage: input.hasReferenceImage,
+  });
 }

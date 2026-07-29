@@ -405,6 +405,42 @@ input[type="text"]:focus {
   font-weight: 600;
 }
 
+.brain-note {
+  margin: 0 0 1.15rem;
+  padding: 0.85rem 1rem;
+  border-radius: 14px;
+  border: 1px solid rgba(20, 32, 28, 0.1);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.brain-note-title {
+  margin: 0;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.brain-note-body {
+  margin: 0.3rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.brain-note.is-ideal {
+  border-color: rgba(31, 122, 102, 0.28);
+  background: rgba(31, 122, 102, 0.08);
+}
+
+.brain-note.is-ok {
+  border-color: rgba(181, 106, 58, 0.28);
+  background: rgba(181, 106, 58, 0.08);
+}
+
+.brain-note.is-risky {
+  border-color: rgba(155, 44, 44, 0.24);
+  background: rgba(155, 44, 44, 0.06);
+}
+
 .preview-stage {
   margin-top: 1rem;
   min-height: 320px;
