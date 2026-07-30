@@ -1,4 +1,5 @@
 import { knockOutSolidBackground } from './background'
+import { dropSpeckIslands, smoothLabelBoundaries } from './labelSmooth'
 import { findPmsByCode, nearestPms, snapPaletteToPms } from './pms'
 import { countLabelUsage, denoiseLabels, extractPalette, quantizeImage } from './quantize'
 import { labelRegions, mergeSmallRegions } from './regions'
@@ -18,9 +19,9 @@ export type ColorVectorSettings = {
 
 export const DEFAULT_COLOR_VECTOR_SETTINGS: ColorVectorSettings = {
   colorCount: 12,
-  minRegionRatio: 0.00025,
-  smoothness: 3,
-  maxDim: 1100,
+  minRegionRatio: 0.0003,
+  smoothness: 4,
+  maxDim: 1000,
   snapToPms: true,
 }
 
@@ -288,14 +289,22 @@ export async function vectorizeColors(
   const { width, height } = imageData
   const palette = extractPalette(imageData, settings.colorCount)
   let labels = quantizeImage(imageData, palette)
-  // One light denoise pass — extra passes erase tertiary accent colors.
-  labels = denoiseLabels(labels, width, height, 1)
+  labels = denoiseLabels(labels, width, height, 2)
 
   const minArea = Math.max(
-    6,
+    8,
     Math.round(width * height * settings.minRegionRatio),
   )
   labels = mergeSmallRegions(labels, width, height, minArea)
+  // Round off pixel stairs on region boundaries before spline fitting.
+  labels = smoothLabelBoundaries(labels, width, height, 3)
+  labels = dropSpeckIslands(
+    labels,
+    width,
+    height,
+    Math.max(12, Math.round(minArea * 0.75)),
+  )
+  labels = smoothLabelBoundaries(labels, width, height, 1)
 
   const mergeMap = buildMergeMap(palette.length, merges)
   const mergedLabels = applyMergeMap(labels, mergeMap)

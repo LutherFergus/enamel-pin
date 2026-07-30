@@ -104,8 +104,8 @@ export function DualControls({ settings, onChange, disabled }: Props) {
         />
       </div>
       <p className="hint">
-        Higher = smoother Vectorizer-style curves (less pixel stair-step). Lower = tighter to
-        the quantized edge.
+        Higher = true vector curves (supersampled spline fit). This is what
+        “vectorize” means — geometry, not traced pixels.
       </p>
       <div className="field">
         <label>
