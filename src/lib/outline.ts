@@ -24,10 +24,10 @@ export type OutlineSettings = {
 }
 
 export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
-  sensitivity: 35,
-  thickness: 2,
+  sensitivity: 85,
+  thickness: 1,
   invert: false,
-  maxDim: 900,
+  maxDim: 1600,
 }
 
 export type OutlineResult = {
@@ -151,6 +151,24 @@ export async function extractOutlinePng(
   const { canvas, ctx, w, h } = drawScaled(source, settings.maxDim, true)
   const imageData = ctx.getImageData(0, 0, w, h)
   knockOutLightBackground(imageData)
+
+  // Also clear solid black mockup backdrops so the outer die-line hugs the pin.
+  {
+    const { data, width, height } = imageData
+    const corners = [0, (width - 1) * 4, (height - 1) * width * 4, ((height - 1) * width + width - 1) * 4]
+    let blackCorners = 0
+    for (const o of corners) {
+      if (data[o + 3] < 16) continue
+      if (data[o] < 18 && data[o + 1] < 18 && data[o + 2] < 18) blackCorners++
+    }
+    if (blackCorners >= 2) {
+      for (let i = 0; i < width * height; i++) {
+        const o = i * 4
+        if (data[o + 3] < 16) continue
+        if (data[o] < 14 && data[o + 1] < 14 && data[o + 2] < 14) data[o + 3] = 0
+      }
+    }
+  }
 
   const colors = colorCountFromSensitivity(settings.sensitivity)
   const palette = extractPalette(imageData, colors, 2)
