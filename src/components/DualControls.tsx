@@ -52,7 +52,7 @@ export function DualControls({ settings, onChange, disabled }: Props) {
         />
       </div>
       <p className="hint">
-        Default 2px. Thickens die-lines evenly — never hollow double-lines.
+        Default 1px. Keeps hatch airy — raise only if die-lines need weight.
       </p>
 
       <h2>Color vector (SVG)</h2>

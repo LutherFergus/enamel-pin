@@ -151,10 +151,12 @@ const report = await page.evaluate(async (urls) => {
 
   const outlineSettingsList = [
     { sensitivity: 60, thickness: 1, invert: false, maxDim: 1400 },
+    { sensitivity: 70, thickness: 1, invert: false, maxDim: 2000 },
+    { sensitivity: 70, thickness: 2, invert: false, maxDim: 2000 },
     { sensitivity: 75, thickness: 2, invert: false, maxDim: 1600 },
     { sensitivity: 85, thickness: 2, invert: false, maxDim: 2000 },
     { sensitivity: 90, thickness: 3, invert: false, maxDim: 2000 },
-    { sensitivity: 70, thickness: 2, invert: false, maxDim: 2000 },
+    { ...DEFAULT_OUTLINE_SETTINGS },
   ]
 
   const results = { probes, fromOrg: [], fromBg: [], fromOutlinePlate: [], fromColorsPlate: [] }

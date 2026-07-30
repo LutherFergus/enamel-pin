@@ -197,9 +197,9 @@ export function extractEnamelMetalMask(
     if (goldDil[i] !== goldEro[i]) goldEdge[i] = 255
   }
 
-  // Close 1px gaps in black hatch, then union with gold dam edges.
-  let mask = dilate(black, width, height, 1)
-  mask = erode(mask, width, height, 1)
+  // Union black hatch with gold dam edges — no morphological close on black
+  // (closing fills the 1px air gaps that make elephant hatching look crisp).
+  let mask = new Uint8Array(black)
   for (let i = 0; i < width * height; i++) {
     if (goldEdge[i]) mask[i] = 255
   }

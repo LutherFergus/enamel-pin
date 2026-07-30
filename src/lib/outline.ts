@@ -32,8 +32,8 @@ export type OutlineSettings = {
 export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
   /** Tuned on elephant BG→outline plate (black hatch + gold-dam edges). */
   sensitivity: 70,
-  /** 2px matches elephant outline plate weight. */
-  thickness: 2,
+  /** 1px keeps hatch channels open — matches plate airiness better than 2–3. */
+  thickness: 1,
   invert: false,
   /** Match elephant production plates (2000×2000). */
   maxDim: 2000,
