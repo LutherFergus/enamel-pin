@@ -60,5 +60,6 @@ export async function remergeVector(
 export function revokeDualUrls(result: DualOutputResult | null) {
   if (!result) return
   URL.revokeObjectURL(result.outline.pngUrl)
+  URL.revokeObjectURL(result.outline.svgUrl)
   URL.revokeObjectURL(result.vector.svgUrl)
 }

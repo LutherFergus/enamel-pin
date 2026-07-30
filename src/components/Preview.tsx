@@ -27,7 +27,7 @@ export function Preview({ viewMode, sourceUrl, result, busy }: Props) {
         <div className="empty-state">
           <h3>Upload or generate</h3>
           <p>
-            You’ll get two assets: a transparent stroke-outline PNG, and a flat-color
+            You’ll get transparent outline SVG/PNG die-lines, plus a flat-color
             vector SVG you can reduce by merging palette colors.
           </p>
         </div>
@@ -40,7 +40,10 @@ export function Preview({ viewMode, sourceUrl, result, busy }: Props) {
       {viewMode === 'source' && sourceUrl ? (
         <img src={sourceUrl} alt="Source artwork" />
       ) : viewMode === 'outline' && result ? (
-        <img src={result.outline.pngUrl} alt="Stroke outline on transparent background" />
+        <img
+          src={result.outline.svgUrl}
+          alt="Stroke outline SVG on transparent background"
+        />
       ) : viewMode === 'vector' && vectorUrl ? (
         <img src={vectorUrl} alt="Color-quantized vector preview" />
       ) : (

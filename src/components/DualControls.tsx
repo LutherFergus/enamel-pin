@@ -16,7 +16,7 @@ export function DualControls({ settings, onChange, disabled }: Props) {
 
   return (
     <div>
-      <h2>Stroke outline (PNG)</h2>
+      <h2>Stroke outline (SVG + PNG)</h2>
       <div className="field">
         <label>
           <span>Outline detail</span>

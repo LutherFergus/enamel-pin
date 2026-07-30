@@ -1,3 +1,4 @@
+import ImageTracer from 'imagetracerjs'
 import { knockOutSolidBackground } from './background'
 import type { Rgb } from './types'
 
@@ -26,6 +27,10 @@ export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
 export type OutlineResult = {
   pngBlob: Blob
   pngUrl: string
+  /** Transparent background — no backdrop rect, only ink paths. */
+  svg: string
+  svgBlob: Blob
+  svgUrl: string
   widthPx: number
   heightPx: number
 }
@@ -50,11 +55,8 @@ function drawScaled(
 }
 
 /**
- * Soft-enamel die-line outline.
- *
- * Prefer extracting the existing dark ink / metal walls from pin art
- * (clean, REF-like) instead of inventing fuzzy photo edges or flooded
- * color-boundary blobs.
+ * Soft-enamel die-line outline as transparent PNG + transparent SVG.
+ * SVG has no background rectangle — only ink geometry on clear.
  */
 export async function extractOutlinePng(
   source: HTMLImageElement | ImageBitmap,
@@ -81,11 +83,11 @@ export async function extractOutlinePng(
     mask = dilate(mask, w, h, thickness)
   }
 
-  const out = ctx.createImageData(w, h)
   const stroke: Rgb = settings.invert
     ? { r: 255, g: 255, b: 255 }
     : { r: 12, g: 10, b: 9 }
 
+  const out = ctx.createImageData(w, h)
   for (let i = 0; i < w * h; i++) {
     const o = i * 4
     if (mask[i]) {
@@ -111,13 +113,170 @@ export async function extractOutlinePng(
     )
   })
 
+  const svg = maskToTransparentSvg(out, w, h, stroke)
+  const svgBlob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' })
+
   return {
     pngBlob,
     pngUrl: URL.createObjectURL(pngBlob),
+    svg,
+    svgBlob,
+    svgUrl: URL.createObjectURL(svgBlob),
     widthPx: w,
     heightPx: h,
   }
 }
+
+/**
+ * Trace the ink mask into smooth filled paths on a fully transparent SVG.
+ * No white/black backdrop rect — alpha stays clear everywhere ink isn't.
+ */
+function maskToTransparentSvg(
+  imageData: ImageData,
+  w: number,
+  h: number,
+  ink: Rgb,
+): string {
+  const superScale = 2
+  const tw = w * superScale
+  const th = h * superScale
+  const data = new Uint8ClampedArray(tw * th * 4)
+
+  for (let y = 0; y < th; y++) {
+    const sy = (y / superScale) | 0
+    for (let x = 0; x < tw; x++) {
+      const sx = (x / superScale) | 0
+      const si = (sy * w + sx) * 4
+      const di = (y * tw + x) * 4
+      if (imageData.data[si + 3] < 128) {
+        data[di + 3] = 0
+        continue
+      }
+      data[di] = ink.r
+      data[di + 1] = ink.g
+      data[di + 2] = ink.b
+      data[di + 3] = 255
+    }
+  }
+
+  const inkHex = `#${[ink.r, ink.g, ink.b].map((v) => v.toString(16).padStart(2, '0')).join('')}`
+  const traced = ImageTracer.imagedataToTracedata(
+    { width: tw, height: th, data },
+    {
+      pal: [
+        { r: ink.r, g: ink.g, b: ink.b, a: 255 },
+        { r: 0, g: 0, b: 0, a: 0 },
+      ],
+      colorsampling: 0,
+      colorquantcycles: 1,
+      numberofcolors: 2,
+      layering: 0,
+      ltres: 4,
+      qtres: 4,
+      pathomit: 16,
+      rightangleenhance: false,
+      linefilter: true,
+      strokewidth: 0,
+      scale: 1,
+      roundcoords: 2,
+      viewbox: true,
+      desc: false,
+      blurradius: 1,
+      blurdelta: 64,
+      lcpr: 0,
+      qcpr: 0,
+    },
+  )
+
+  const s = 1 / superScale
+  const parts: string[] = [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" shape-rendering="geometricPrecision">`,
+    `<!-- Transparent enamel die-line outline · no background -->`,
+    '<g id="outline" fill-rule="evenodd">',
+  ]
+
+  const layers = traced.layers as Array<
+    Array<{
+      isholepath?: boolean
+      segments: Array<{
+        type: string
+        x1: number
+        y1: number
+        x2: number
+        y2: number
+        x3?: number
+        y3?: number
+      }>
+      holechildren?: number[]
+    }>
+  >
+  const palette = traced.palette as Array<{ r: number; g: number; b: number; a: number }>
+
+  for (let li = 0; li < layers.length; li++) {
+    const pc = palette[li]
+    if (!pc || pc.a < 128) continue
+    const layer = layers[li]
+    for (const smp of layer) {
+      if (smp.isholepath || !smp.segments?.length || smp.segments.length < 3) continue
+      let d = outlineSegPath(smp.segments, s)
+      if (smp.holechildren?.length) {
+        for (const hi of smp.holechildren) {
+          const hole = layer[hi]
+          if (!hole?.segments?.length) continue
+          d += ' ' + outlineSegPath(hole.segments, s, true)
+        }
+      }
+      // Matching stroke seals hairlines; still fully transparent outside paths.
+      parts.push(
+        `<path fill="${inkHex}" stroke="${inkHex}" stroke-width="1.1" stroke-linejoin="round" paint-order="stroke fill" d="${d}" />`,
+      )
+    }
+  }
+
+  parts.push('</g></svg>')
+  return parts.join('\n')
+}
+
+function outlineSegPath(
+  segments: Array<{
+    x1: number
+    y1: number
+    x2: number
+    y2: number
+    x3?: number
+    y3?: number
+  }>,
+  scale: number,
+  reverse = false,
+): string {
+  const r = (n: number) => Math.round(n * scale * 100) / 100
+  if (!segments.length) return ''
+  if (!reverse) {
+    let d = `M ${r(segments[0].x1)} ${r(segments[0].y1)}`
+    for (const seg of segments) {
+      if (seg.x3 != null && seg.y3 != null) {
+        d += ` Q ${r(seg.x2)} ${r(seg.y2)} ${r(seg.x3)} ${r(seg.y3)}`
+      } else {
+        d += ` L ${r(seg.x2)} ${r(seg.y2)}`
+      }
+    }
+    return d + ' Z'
+  }
+  const last = segments[segments.length - 1]
+  const sx = last.x3 != null ? last.x3 : last.x2
+  const sy = last.y3 != null ? last.y3 : last.y2
+  let d = `M ${r(sx)} ${r(sy)}`
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const seg = segments[i]
+    if (seg.x3 != null && seg.y3 != null) {
+      d += ` Q ${r(seg.x2)} ${r(seg.y2)} ${r(seg.x1)} ${r(seg.y1)}`
+    } else {
+      d += ` L ${r(seg.x1)} ${r(seg.y1)}`
+    }
+  }
+  return d + ' Z'
+}
+
 
 /**
  * Build an ink/metal-wall mask from dark stroke pixels.
