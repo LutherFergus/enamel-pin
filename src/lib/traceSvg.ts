@@ -87,6 +87,8 @@ export function labelsToSmoothSvg(
   })
 
   const coordScale = 1 / superScale
+  // Hairline seam killer: matching stroke under each fill (~1 CSS px at art size).
+  const seamStroke = Math.max(0.9, 1.15 + t * 0.6)
 
   const legend = [...metaByIndex.values()]
     .map(
@@ -98,12 +100,14 @@ export function labelsToSmoothSvg(
     .join('\n')
 
   const parts: string[] = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" shape-rendering="geometricPrecision">`,
     `<!-- vectorized enamel fills · PMS Solid Coated\n${legend}\n-->`,
     '<g id="fills">',
   ]
 
-  let pathCount = 0
+  type PendingPath = { d: string; fill: string; pmsAttr: string; area: number }
+  const pending: PendingPath[] = []
+
   const layers = traced.layers as TracerPath[][]
   const palette = traced.palette as Array<{ r: number; g: number; b: number; a: number }>
 
@@ -135,29 +139,33 @@ export function labelsToSmoothSvg(
 
       const segs = scaleSegs(promoteCollinearToCurves(smp.segments), coordScale)
       let d = segmentPath(segs)
+      let area = approxPathArea(segs)
 
       if (smp.holechildren?.length) {
         for (const hi of smp.holechildren) {
           const hole = layer[hi]
           if (!hole?.segments?.length) continue
-          d +=
-            ' ' +
-            segmentPath(
-              scaleSegs(promoteCollinearToCurves(hole.segments), coordScale),
-              true,
-            )
+          const hSegs = scaleSegs(promoteCollinearToCurves(hole.segments), coordScale)
+          d += ' ' + segmentPath(hSegs, true)
+          area = Math.max(0, area - approxPathArea(hSegs))
         }
       }
 
-      parts.push(
-        `<path fill="${fill}" fill-rule="evenodd" stroke="none"${pmsAttr} d="${d}" />`,
-      )
-      pathCount++
+      pending.push({ d, fill, pmsAttr, area })
     }
   }
 
+  // Large fills underneath, detail on top — seams get covered by overlap strokes.
+  pending.sort((a, b) => b.area - a.area)
+
+  for (const p of pending) {
+    parts.push(
+      `<path fill="${p.fill}" fill-rule="evenodd" stroke="${p.fill}" stroke-width="${seamStroke.toFixed(2)}" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke fill"${p.pmsAttr} d="${p.d}" />`,
+    )
+  }
+
   parts.push('</g></svg>')
-  return { svg: parts.join('\n'), pathCount }
+  return { svg: parts.join('\n'), pathCount: pending.length }
 }
 
 function renderFlat(
@@ -205,6 +213,27 @@ function nearestNeighborScale(
     }
   }
   return { width: tw, height: th, data }
+}
+
+function approxPathArea(segments: Seg[]): number {
+  if (!segments.length) return 0
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const s of segments) {
+    for (const [x, y] of [
+      [s.x1, s.y1],
+      [s.x2, s.y2],
+      [s.x3 ?? s.x2, s.y3 ?? s.y2],
+    ] as const) {
+      if (x < minX) minX = x
+      if (y < minY) minY = y
+      if (x > maxX) maxX = x
+      if (y > maxY) maxY = y
+    }
+  }
+  return Math.max(0, maxX - minX) * Math.max(0, maxY - minY)
 }
 
 function scaleSegs(segments: Seg[], s: number): Seg[] {

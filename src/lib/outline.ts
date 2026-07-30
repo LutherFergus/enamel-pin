@@ -70,7 +70,10 @@ export async function extractOutlinePng(
   // Drop tiny speck components (noise left of silhouettes, texture grit)
   mask = removeSmallComponents(mask, w, h, Math.max(12, Math.round(w * h * 0.00004)))
 
-  // Light cleanup — do NOT erode+dilate hard (that floods thin die-lines)
+  // Morphological close reconnects broken knot/die-line gaps without flooding.
+  mask = dilate(mask, w, h, 1)
+  mask = erode(mask, w, h, 1)
+  mask = majorityClean(mask, w, h)
   mask = majorityClean(mask, w, h)
 
   const thickness = Math.max(0, Math.min(6, Math.round(settings.thickness)))
@@ -292,6 +295,28 @@ function dilate(mask: Uint8Array, w: number, h: number, radius: number): Uint8Ar
           out[ny * w + nx] = 255
         }
       }
+    }
+  }
+  return out
+}
+
+function erode(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
+  if (radius <= 0) return mask
+  const out = new Uint8Array(w * h)
+  for (let y = radius; y < h - radius; y++) {
+    for (let x = radius; x < w - radius; x++) {
+      if (!mask[y * w + x]) continue
+      let keep = true
+      for (let dy = -radius; dy <= radius && keep; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (dx * dx + dy * dy > radius * radius) continue
+          if (!mask[(y + dy) * w + (x + dx)]) {
+            keep = false
+            break
+          }
+        }
+      }
+      if (keep) out[y * w + x] = 255
     }
   }
   return out

@@ -1,5 +1,5 @@
 import { knockOutSolidBackground } from './background'
-import { dropSpeckIslands, smoothLabelBoundaries } from './labelSmooth'
+import { dropSpeckIslands, overlapAdjacentFills, smoothLabelBoundaries } from './labelSmooth'
 import { findPmsByCode, nearestPms, snapPaletteToPms } from './pms'
 import { countLabelUsage, denoiseLabels, extractPalette, quantizeImage } from './quantize'
 import { labelRegions, mergeSmallRegions } from './regions'
@@ -305,6 +305,8 @@ export async function vectorizeColors(
     Math.max(12, Math.round(minArea * 0.75)),
   )
   labels = smoothLabelBoundaries(labels, width, height, 1)
+  // Overlap abutting fills so vector paths seal (no checkerboard hairlines).
+  labels = overlapAdjacentFills(labels, width, height)
 
   const mergeMap = buildMergeMap(palette.length, merges)
   const mergedLabels = applyMergeMap(labels, mergeMap)

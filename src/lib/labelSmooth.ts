@@ -123,3 +123,65 @@ export function dropSpeckIslands(
 
   return out
 }
+
+/**
+ * Grow each opaque region 1px into neighboring opaque colors.
+ * Creates intentional overlap so traced fills share an edge (no hairline gaps).
+ * Does not expand into transparency (keeps silhouette clean).
+ */
+export function overlapAdjacentFills(
+  labels: Uint16Array,
+  width: number,
+  height: number,
+): Uint16Array {
+  const out = new Uint16Array(labels)
+  const claims = new Map<number, Map<number, number>>() // pixel → color → votes
+
+  const vote = (i: number, color: number) => {
+    let m = claims.get(i)
+    if (!m) {
+      m = new Map()
+      claims.set(i, m)
+    }
+    m.set(color, (m.get(color) ?? 0) + 1)
+  }
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = y * width + x
+      const v = labels[i]
+      if (v === 0xffff) continue
+      for (const [dx, dy] of [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ] as const) {
+        const nx = x + dx
+        const ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue
+        const ni = ny * width + nx
+        const n = labels[ni]
+        if (n === 0xffff || n === v) continue
+        vote(ni, v)
+      }
+    }
+  }
+
+  for (const [i, votes] of claims) {
+    // Keep existing color unless a neighbor strongly claims this pixel.
+    const current = labels[i]
+    let best = current
+    let bestCount = votes.get(current) ?? 0
+    for (const [color, count] of votes) {
+      if (count > bestCount) {
+        bestCount = count
+        best = color
+      }
+    }
+    // Only rewrite when a neighbor color claims with ≥2 sides (shared edge).
+    if (best !== current && bestCount >= 2) out[i] = best
+  }
+
+  return out
+}
