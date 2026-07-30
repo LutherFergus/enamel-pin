@@ -24,10 +24,10 @@ export type OutlineSettings = {
 }
 
 export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
-  sensitivity: 35,
-  thickness: 2,
+  sensitivity: 85,
+  thickness: 1,
   invert: false,
-  maxDim: 900,
+  maxDim: 1600,
 }
 
 export type OutlineResult = {

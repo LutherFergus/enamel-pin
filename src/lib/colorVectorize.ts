@@ -18,11 +18,11 @@ export type ColorVectorSettings = {
 }
 
 export const DEFAULT_COLOR_VECTOR_SETTINGS: ColorVectorSettings = {
-  colorCount: 14,
-  minRegionRatio: 0.00012,
+  colorCount: 16,
+  minRegionRatio: 0.0001,
   smoothness: 3,
-  maxDim: 1200,
-  snapToPms: true,
+  maxDim: 1600,
+  snapToPms: false,
 }
 
 /** Manual per-slot PMS overrides: palette index → PMS code like "185 C". */
