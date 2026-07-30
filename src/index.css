@@ -269,8 +269,10 @@ img {
   overscroll-behavior: contain;
 }
 
-.preview-zoom-viewport.is-zoomed {
-  cursor: grab;
+.preview-zoom-viewport.is-zoomed .preview-zoom-layer > img,
+.preview-zoom-viewport.is-zoomed .preview-zoom-layer > svg {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
 }
 
 .preview-zoom-viewport:active {
@@ -300,7 +302,7 @@ img {
   user-select: none;
   -webkit-user-drag: none;
   pointer-events: none;
-  filter: drop-shadow(0 10px 24px rgba(28, 25, 21, 0.18));
+  filter: none;
   animation: fade-in 320ms ease both;
 }
 

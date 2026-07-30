@@ -1,9 +1,15 @@
+import { denoiseLabels, extractPalette, quantizeImage } from './quantize'
+import { mergeSmallRegions } from './regions'
 import type { Rgb } from './types'
 
 export type OutlineSettings = {
-  /** Edge sensitivity 0–100 (higher = more lines). */
+  /**
+   * Detail 0–100 → how many flat colors to split into before stroking.
+   * Lower = fewer regions = cleaner, fewer die-lines.
+   * Higher = more internal single-line separations.
+   */
   sensitivity: number
-  /** Stroke thickness in pixels (1–6). */
+  /** Stroke thickness in pixels (1 = true single-pixel die-line). */
   thickness: number
   /** Invert: white strokes on transparent instead of black. */
   invert: boolean
@@ -12,10 +18,10 @@ export type OutlineSettings = {
 }
 
 export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
-  sensitivity: 42,
-  thickness: 2,
+  sensitivity: 35,
+  thickness: 1,
   invert: false,
-  maxDim: 1024,
+  maxDim: 900,
 }
 
 export type OutlineResult = {
@@ -23,10 +29,6 @@ export type OutlineResult = {
   pngUrl: string
   widthPx: number
   heightPx: number
-}
-
-function luma(r: number, g: number, b: number): number {
-  return 0.299 * r + 0.587 * g + 0.114 * b
 }
 
 function drawScaled(
@@ -42,109 +44,52 @@ function drawScaled(
   canvas.width = w
   canvas.height = h
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!
+  // Soft scale reduces generative/photo grit before posterize
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(source, 0, 0, w, h)
   return { canvas, ctx, w, h }
 }
 
+function colorCountFromSensitivity(sensitivity: number): number {
+  // 0 → 3 colors, 50 → 6, 100 → 10
+  return Math.max(3, Math.min(10, Math.round(3 + (sensitivity / 100) * 7)))
+}
+
+function minRegionRatioFromSensitivity(sensitivity: number): number {
+  // Lower sensitivity → more aggressive speck cleanup
+  const t = 1 - sensitivity / 100
+  return 0.0012 + t * 0.006
+}
+
 /**
- * Extract a stroke / line-art outline as a transparent PNG.
- * Uses Sobel edges with optional dilation for stroke weight.
+ * Clean enamel-pin die-line outline:
+ * posterize to flat fills → stroke ONLY region boundaries as single-pixel lines.
+ * No Sobel / photo-edge noise.
  */
 export async function extractOutlinePng(
   source: HTMLImageElement | ImageBitmap,
   settings: OutlineSettings,
 ): Promise<OutlineResult> {
   const { canvas, ctx, w, h } = drawScaled(source, settings.maxDim)
-  const src = ctx.getImageData(0, 0, w, h)
-  const gray = new Float32Array(w * h)
-  const alpha = new Uint8Array(w * h)
+  const imageData = ctx.getImageData(0, 0, w, h)
 
-  for (let i = 0; i < w * h; i++) {
-    const o = i * 4
-    alpha[i] = src.data[o + 3]
-    gray[i] = alpha[i] < 16 ? 255 : luma(src.data[o], src.data[o + 1], src.data[o + 2])
-  }
+  knockOutLightBackground(imageData)
 
-  // Light blur to reduce noise
-  const blurred = boxBlurGray(gray, w, h, 1)
+  const colors = colorCountFromSensitivity(settings.sensitivity)
+  const palette = extractPalette(imageData, colors, 2)
+  let labels = quantizeImage(imageData, palette)
+  labels = denoiseLabels(labels, w, h, 4)
+  const minArea = Math.max(48, Math.round(w * h * minRegionRatioFromSensitivity(settings.sensitivity)))
+  labels = mergeSmallRegions(labels, w, h, minArea)
+  labels = denoiseLabels(labels, w, h, 2)
 
-  const mag = new Float32Array(w * h)
-  let maxMag = 0
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      const i = y * w + x
-      if (alpha[i] < 16) {
-        mag[i] = 0
-        continue
-      }
-      const gx =
-        -blurred[i - w - 1] +
-        blurred[i - w + 1] -
-        2 * blurred[i - 1] +
-        2 * blurred[i + 1] -
-        blurred[i + w - 1] +
-        blurred[i + w + 1]
-      const gy =
-        -blurred[i - w - 1] -
-        2 * blurred[i - w] -
-        blurred[i - w + 1] +
-        blurred[i + w - 1] +
-        2 * blurred[i + w] +
-        blurred[i + w + 1]
-      const m = Math.hypot(gx, gy)
-      mag[i] = m
-      if (m > maxMag) maxMag = m
-    }
-  }
+  // Single-pixel die-lines only (one side of each boundary)
+  let mask = singlePixelBoundaryMask(labels, w, h)
 
-  // Sensitivity: lower threshold keeps more edges
-  const t = 1 - settings.sensitivity / 100
-  const high = maxMag * (0.12 + t * 0.45)
-  const low = high * 0.4
-
-  const edge = new Uint8Array(w * h)
-  for (let i = 0; i < w * h; i++) {
-    if (mag[i] >= high) edge[i] = 2
-    else if (mag[i] >= low) edge[i] = 1
-  }
-
-  // Hysteresis
-  const stack: number[] = []
-  for (let i = 0; i < w * h; i++) if (edge[i] === 2) stack.push(i)
-  while (stack.length) {
-    const i = stack.pop()!
-    const x = i % w
-    const y = (i / w) | 0
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        if (!dx && !dy) continue
-        const nx = x + dx
-        const ny = y + dy
-        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
-        const ni = ny * w + nx
-        if (edge[ni] === 1) {
-          edge[ni] = 2
-          stack.push(ni)
-        }
-      }
-    }
-  }
-
-  let mask = new Uint8Array(w * h)
-  for (let i = 0; i < w * h; i++) mask[i] = edge[i] === 2 ? 255 : 0
-
-  // Also reinforce color-boundary strokes for poster-like art
-  const boundary = colorBoundaryMask(src.data, w, h, 28)
-  for (let i = 0; i < w * h; i++) {
-    if (boundary[i]) mask[i] = 255
-  }
-
-  // Outer die-line: stroke where opaque artwork meets transparency
-  // (Sobel alone is weak on light fills against a clear backdrop).
-  const silhouette = alphaSilhouetteMask(alpha, w, h)
-  for (let i = 0; i < w * h; i++) {
-    if (silhouette[i]) mask[i] = 255
-  }
+  // Drop speck strokes / freckles that aren't real die-lines
+  const minStroke = Math.max(18, Math.round(Math.min(w, h) * 0.02))
+  mask = keepLargeComponents(mask, w, h, minStroke)
 
   const thickness = Math.max(1, Math.min(6, Math.round(settings.thickness)))
   if (thickness > 1) {
@@ -154,11 +99,11 @@ export async function extractOutlinePng(
   const out = ctx.createImageData(w, h)
   const stroke: Rgb = settings.invert
     ? { r: 255, g: 255, b: 255 }
-    : { r: 20, g: 18, b: 16 }
+    : { r: 18, g: 16, b: 14 }
 
   for (let i = 0; i < w * h; i++) {
     const o = i * 4
-    if (mask[i] && alpha[i] >= 16) {
+    if (mask[i]) {
       out.data[o] = stroke.r
       out.data[o + 1] = stroke.g
       out.data[o + 2] = stroke.b
@@ -189,117 +134,126 @@ export async function extractOutlinePng(
   }
 }
 
-function boxBlurGray(
-  src: Float32Array,
+/** Treat very light backdrop as transparent so the outer die-line hugs the pin. */
+function knockOutLightBackground(imageData: ImageData) {
+  const { data, width, height } = imageData
+  const corners = [
+    0,
+    (width - 1) * 4,
+    (height - 1) * width * 4,
+    ((height - 1) * width + width - 1) * 4,
+  ]
+  let lightCorners = 0
+  for (const o of corners) {
+    if (data[o + 3] < 16) {
+      lightCorners++
+      continue
+    }
+    if (data[o] > 230 && data[o + 1] > 230 && data[o + 2] > 230) lightCorners++
+  }
+  if (lightCorners < 2) return
+
+  for (let i = 0; i < width * height; i++) {
+    const o = i * 4
+    if (data[o + 3] < 16) continue
+    if (data[o] >= 245 && data[o + 1] >= 245 && data[o + 2] >= 245) {
+      data[o + 3] = 0
+    }
+  }
+}
+
+/**
+ * True single-pixel die-lines.
+ * - Opaque↔opaque: mark only on the left/top side of the seam (right/down check)
+ *   so we never double-stroke.
+ * - Opaque↔empty: also mark left/top silhouette edges (otherwise those sides vanish).
+ */
+function singlePixelBoundaryMask(labels: Uint16Array, w: number, h: number): Uint8Array {
+  const mask = new Uint8Array(w * h)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x
+      const v = labels[i]
+      if (v === 0xffff) continue
+
+      const right = x + 1 < w ? labels[i + 1] : 0xffff
+      const down = y + 1 < h ? labels[i + w] : 0xffff
+      const left = x > 0 ? labels[i - 1] : 0xffff
+      const up = y > 0 ? labels[i - w] : 0xffff
+
+      if (right !== v || down !== v) {
+        mask[i] = 255
+        continue
+      }
+      if (left === 0xffff || up === 0xffff) {
+        mask[i] = 255
+      }
+    }
+  }
+  return mask
+}
+
+/** Keep only stroke components with enough pixels (drops freckle noise). */
+function keepLargeComponents(
+  mask: Uint8Array,
   w: number,
   h: number,
-  radius: number,
-): Float32Array {
-  if (radius <= 0) return src
-  const tmp = new Float32Array(w * h)
-  const out = new Float32Array(w * h)
-  const span = radius * 2 + 1
+  minPixels: number,
+): Uint8Array {
+  const seen = new Uint8Array(w * h)
+  const out = new Uint8Array(w * h)
+  const stack: number[] = []
 
-  for (let y = 0; y < h; y++) {
-    let sum = 0
-    for (let x = -radius; x <= radius; x++) {
-      const cx = Math.min(w - 1, Math.max(0, x))
-      sum += src[y * w + cx]
+  for (let start = 0; start < w * h; start++) {
+    if (!mask[start] || seen[start]) continue
+
+    stack.length = 0
+    stack.push(start)
+    seen[start] = 1
+    const component: number[] = []
+
+    while (stack.length) {
+      const i = stack.pop()!
+      component.push(i)
+      const x = i % w
+      const y = (i / w) | 0
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue
+          const nx = x + dx
+          const ny = y + dy
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+          const ni = ny * w + nx
+          if (!mask[ni] || seen[ni]) continue
+          seen[ni] = 1
+          stack.push(ni)
+        }
+      }
     }
-    for (let x = 0; x < w; x++) {
-      tmp[y * w + x] = sum / span
-      const leave = Math.min(w - 1, Math.max(0, x - radius))
-      const enter = Math.min(w - 1, Math.max(0, x + radius + 1))
-      sum += src[y * w + enter] - src[y * w + leave]
+
+    if (component.length >= minPixels) {
+      for (const i of component) out[i] = 255
     }
   }
 
-  for (let x = 0; x < w; x++) {
-    let sum = 0
-    for (let y = -radius; y <= radius; y++) {
-      const cy = Math.min(h - 1, Math.max(0, y))
-      sum += tmp[cy * w + x]
-    }
-    for (let y = 0; y < h; y++) {
-      out[y * w + x] = sum / span
-      const leave = Math.min(h - 1, Math.max(0, y - radius))
-      const enter = Math.min(h - 1, Math.max(0, y + radius + 1))
-      sum += tmp[enter * w + x] - tmp[leave * w + x]
-    }
-  }
   return out
 }
 
 function dilate(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
+  if (radius <= 0) return mask
   const out = new Uint8Array(mask)
+  const r2 = radius * radius
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       if (!mask[y * w + x]) continue
       for (let dy = -radius; dy <= radius; dy++) {
         for (let dx = -radius; dx <= radius; dx++) {
-          if (dx * dx + dy * dy > radius * radius) continue
+          if (dx * dx + dy * dy > r2) continue
           const nx = x + dx
           const ny = y + dy
           if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
           out[ny * w + nx] = 255
         }
-      }
-    }
-  }
-  return out
-}
-
-/** Mark opaque pixels that touch transparent / out-of-bounds neighbors. */
-function alphaSilhouetteMask(alpha: Uint8Array, w: number, h: number): Uint8Array {
-  const out = new Uint8Array(w * h)
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = y * w + x
-      if (alpha[i] < 16) continue
-      let edge = x === 0 || y === 0 || x === w - 1 || y === h - 1
-      if (!edge) {
-        if (
-          alpha[i - 1] < 16 ||
-          alpha[i + 1] < 16 ||
-          alpha[i - w] < 16 ||
-          alpha[i + w] < 16
-        ) {
-          edge = true
-        }
-      }
-      if (edge) out[i] = 1
-    }
-  }
-  return out
-}
-
-/** Mark pixels that sit on a strong local color discontinuity. */
-function colorBoundaryMask(
-  data: Uint8ClampedArray,
-  w: number,
-  h: number,
-  threshold: number,
-): Uint8Array {
-  const out = new Uint8Array(w * h)
-  const dist = (i: number, j: number) => {
-    const dr = data[i] - data[j]
-    const dg = data[i + 1] - data[j + 1]
-    const db = data[i + 2] - data[j + 2]
-    return Math.sqrt(dr * dr + dg * dg + db * db)
-  }
-  for (let y = 0; y < h - 1; y++) {
-    for (let x = 0; x < w - 1; x++) {
-      const i = (y * w + x) * 4
-      if (data[i + 3] < 16) continue
-      const right = i + 4
-      const down = i + w * 4
-      if (data[right + 3] >= 16 && dist(i, right) >= threshold) {
-        out[y * w + x] = 1
-        out[y * w + x + 1] = 1
-      }
-      if (data[down + 3] >= 16 && dist(i, down) >= threshold) {
-        out[y * w + x] = 1
-        out[(y + 1) * w + x] = 1
       }
     }
   }
