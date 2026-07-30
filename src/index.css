@@ -269,8 +269,8 @@ img {
   overscroll-behavior: contain;
 }
 
-.preview-zoom-viewport.is-zoomed .preview-zoom-layer > img,
-.preview-zoom-viewport.is-zoomed .preview-zoom-layer > svg {
+.preview-zoom-viewport.is-zoomed .preview-zoom-layer > img {
+  /* Raster source only — never pixelate inline SVG vectors. */
   image-rendering: pixelated;
   image-rendering: crisp-edges;
 }
@@ -287,7 +287,8 @@ img {
 }
 
 .preview-stage .preview-zoom-layer > img,
-.preview-stage .preview-zoom-layer > svg {
+.preview-stage .preview-zoom-layer > .preview-svg,
+.preview-stage .preview-zoom-layer > .preview-svg > svg {
   position: absolute;
   inset: 0;
   width: 100% !important;
@@ -304,6 +305,20 @@ img {
   pointer-events: none;
   filter: none;
   animation: fade-in 320ms ease both;
+}
+
+.preview-stage .preview-zoom-layer > .preview-svg {
+  display: grid;
+  place-items: center;
+  background: transparent;
+}
+
+.preview-stage .preview-zoom-layer > .preview-svg > svg {
+  position: static;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: visible;
+  background: transparent;
 }
 
 .preview-zoom-layer > .empty-state {
@@ -862,7 +877,8 @@ img {
   }
 
   .preview-stage .preview-zoom-layer > img,
-  .preview-stage .preview-zoom-layer > svg {
+  .preview-stage .preview-zoom-layer > .preview-svg,
+  .preview-stage .preview-zoom-layer > .preview-svg > svg {
     width: 100% !important;
     height: 100% !important;
     max-width: none !important;

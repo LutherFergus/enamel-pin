@@ -21,14 +21,18 @@ const MIN_SCALE = 1
 const MAX_SCALE = 6
 
 export function Preview({ viewMode, sourceUrl, result, busy }: Props) {
-  const [vectorUrl, setVectorUrl] = useState<string | null>(null)
+  const [vectorSvg, setVectorSvg] = useState<string | null>(null)
+  const [outlineSvg, setOutlineSvg] = useState<string | null>(null)
 
   useEffect(() => {
     if (!result) {
-      setVectorUrl(null)
+      setVectorSvg(null)
+      setOutlineSvg(null)
       return
     }
-    setVectorUrl(result.vector.svgUrl)
+    // Inline SVG markup so CSS zoom scales vectors (not a rasterized <img>).
+    setVectorSvg(result.vector.svg)
+    setOutlineSvg(result.outline.svg)
   }, [result])
 
   if (!sourceUrl && !result) {
@@ -37,7 +41,7 @@ export function Preview({ viewMode, sourceUrl, result, busy }: Props) {
         <div className="empty-state">
           <h3>Upload or generate</h3>
           <p>
-            You’ll get two assets: a transparent stroke-outline PNG, and a flat-color
+            You’ll get two assets: a smooth vector outline SVG, and a flat-color
             vector SVG you can reduce by merging palette colors.
           </p>
         </div>
@@ -54,22 +58,28 @@ export function Preview({ viewMode, sourceUrl, result, busy }: Props) {
 
   if (viewMode === 'source' && sourceUrl) {
     content = <img src={sourceUrl} alt="Source artwork" draggable={false} />
-  } else if (viewMode === 'outline' && result) {
+  } else if (viewMode === 'outline' && outlineSvg) {
     content = (
-      <img
-        src={result.outline.pngUrl}
-        alt="Stroke outline on transparent background"
-        draggable={false}
+      <div
+        className="preview-svg"
+        role="img"
+        aria-label="Smooth vector outline"
+        dangerouslySetInnerHTML={{ __html: outlineSvg }}
       />
     )
-  } else if (viewMode === 'vector' && vectorUrl) {
+  } else if (viewMode === 'vector' && vectorSvg) {
     content = (
-      <img src={vectorUrl} alt="Color-quantized vector preview" draggable={false} />
+      <div
+        className="preview-svg"
+        role="img"
+        aria-label="Color-quantized vector preview"
+        dangerouslySetInnerHTML={{ __html: vectorSvg }}
+      />
     )
   }
 
   return (
-    <ZoomableStage busy={busy} resetKey={`${viewMode}:${sourceUrl}:${vectorUrl}:${result?.outline.pngUrl ?? ''}`}>
+    <ZoomableStage busy={busy} resetKey={`${viewMode}:${sourceUrl}:${vectorSvg?.length ?? 0}:${outlineSvg?.length ?? 0}`}>
       {content}
     </ZoomableStage>
   )

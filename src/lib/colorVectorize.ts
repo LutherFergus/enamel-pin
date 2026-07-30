@@ -1,6 +1,6 @@
-import { collapseCollinear, extractColorContours, ringsToSvgD, simplifyPath } from './contours'
+import { collapseCollinear, destairPath, extractColorContours, ringsToSvgD, simplifyPath } from './contours'
 import type { Point } from './contours'
-import { analyzeLineArt, extractInkMask } from './lineArt'
+import { analyzeLineArt, extractInkMask, remapMetalToBlack } from './lineArt'
 import { findPmsByCode, nearestPms, snapPaletteToPms } from './pms'
 import { denoiseLabels, extractPalette, quantizeImage } from './quantize'
 import { labelRegions, mergeSmallRegions } from './regions'
@@ -18,11 +18,11 @@ export type ColorVectorSettings = {
 }
 
 export const DEFAULT_COLOR_VECTOR_SETTINGS: ColorVectorSettings = {
-  colorCount: 16,
+  colorCount: 14,
   minRegionRatio: 0.0001,
   smoothness: 3,
-  maxDim: 1600,
-  snapToPms: false,
+  maxDim: 2000,
+  snapToPms: true,
 }
 
 /** Manual per-slot PMS overrides: palette index → PMS code like "185 C". */
@@ -72,13 +72,13 @@ function knockOutNearWhite(imageData: ImageData) {
   const { data } = imageData
   for (let i = 0; i < data.length; i += 4) {
     if (data[i + 3] < 16) continue
-    if (data[i] >= 245 && data[i + 1] >= 245 && data[i + 2] >= 245) {
+    if (data[i] >= 235 && data[i + 1] >= 235 && data[i + 2] >= 235) {
       data[i + 3] = 0
     }
   }
 }
 
-/** Drop solid black backdrops (common on finished pin mockups). */
+/** Drop solid black / dark studio backdrops (common on finished pin mockups). */
 function knockOutNearBlackBackdrop(imageData: ImageData) {
   const { data, width, height } = imageData
   const corners = [
@@ -87,31 +87,193 @@ function knockOutNearBlackBackdrop(imageData: ImageData) {
     (height - 1) * width * 4,
     ((height - 1) * width + width - 1) * 4,
   ]
-  let blackCorners = 0
+  let darkCorners = 0
+  let opaqueCorners = 0
+  let cornerY = 0
   for (const o of corners) {
     if (data[o + 3] < 16) continue
-    if (data[o] < 18 && data[o + 1] < 18 && data[o + 2] < 18) blackCorners++
+    opaqueCorners++
+    const y = 0.299 * data[o] + 0.587 * data[o + 1] + 0.114 * data[o + 2]
+    cornerY += y
+    if (y < 70) darkCorners++
   }
-  if (blackCorners < 2) return
+  if (opaqueCorners < 2 || darkCorners < 2) return
+  const avgCornerY = cornerY / opaqueCorners
+  const thresh = Math.min(85, Math.max(28, avgCornerY + 28))
 
-  for (let i = 0; i < width * height; i++) {
+  const n = width * height
+  const cand = new Uint8Array(n)
+  for (let i = 0; i < n; i++) {
     const o = i * 4
     if (data[o + 3] < 16) continue
-    if (data[o] < 14 && data[o + 1] < 14 && data[o + 2] < 14) {
-      data[o + 3] = 0
+    const r = data[o]
+    const g = data[o + 1]
+    const b = data[o + 2]
+    const y = 0.299 * r + 0.587 * g + 0.114 * b
+    const chroma = Math.max(r, g, b) - Math.min(r, g, b)
+    if (y < thresh && chroma < 40) cand[i] = 1
+  }
+
+  const seen = new Uint8Array(n)
+  const stack: number[] = []
+  const pushBorder = (i: number) => {
+    if (!cand[i] || seen[i]) return
+    seen[i] = 1
+    stack.push(i)
+  }
+  for (let x = 0; x < width; x++) {
+    pushBorder(x)
+    pushBorder((height - 1) * width + x)
+  }
+  for (let y = 0; y < height; y++) {
+    pushBorder(y * width)
+    pushBorder(y * width + width - 1)
+  }
+
+  while (stack.length) {
+    const i = stack.pop()!
+    data[i * 4 + 3] = 0
+    const x = i % width
+    const y = (i / width) | 0
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue
+        const nx = x + dx
+        const ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue
+        const ni = ny * width + nx
+        if (!cand[ni] || seen[ni]) continue
+        seen[ni] = 1
+        stack.push(ni)
+      }
     }
   }
 }
 
-function processContour(points: Point[], smoothness: number): Point[] {
+function processContour(points: Point[], smoothness: number, scale = 1): Point[] {
   // Flatten pixel stairs, keep sharp enamel corners. Bézier conversion happens
   // at SVG emit time — Chaikin is avoided (it blobs star points / box corners).
-  if (smoothness <= 0) return collapseCollinear(points, true)
-  // Low epsilon keeps star points / trunk ridges; curves soften the stairs.
-  const epsilon = 0.55 + (5 - Math.min(5, smoothness)) * 0.1
-  let pts = simplifyPath(points, epsilon)
+  let pts = destairPath(points, true)
+  if (smoothness <= 0) {
+    pts = collapseCollinear(pts, true)
+    return scale === 1 ? pts : pts.map((p) => ({ x: p.x / scale, y: p.y / scale }))
+  }
+  // Higher smoothness → longer curve spans (less lattice wiggle).
+  const epsilon = (0.9 + Math.min(5, smoothness) * 0.35) * Math.max(1, scale * 0.55)
+  pts = simplifyPath(pts, epsilon)
   pts = collapseCollinear(pts, true)
+  if (scale !== 1) pts = pts.map((p) => ({ x: p.x / scale, y: p.y / scale }))
   return pts
+}
+
+/**
+ * Contour each color via binary bilinear upsample + soften so cubic paths
+ * get sub-pixel edges (nearest-neighbor label upsampling does NOT remove stairs).
+ */
+function extractSmoothColorContours(
+  labels: Uint16Array,
+  width: number,
+  height: number,
+  minArea: number,
+  smoothness: number,
+): Map<number, Point[][][]> {
+  const factor = smoothness > 0 ? 2 : 1
+  const colors = new Set<number>()
+  for (let i = 0; i < labels.length; i++) {
+    if (labels[i] !== 0xffff) colors.add(labels[i])
+  }
+
+  const out = new Map<number, Point[][][]>()
+  for (const color of colors) {
+    const mask = new Uint8Array(width * height)
+    let count = 0
+    for (let i = 0; i < labels.length; i++) {
+      if (labels[i] === color) {
+        mask[i] = 255
+        count++
+      }
+    }
+    if (count < minArea) continue
+
+    let workMask = mask
+    let ww = width
+    let wh = height
+    if (factor > 1) {
+      const nw = width * factor
+      const nh = height * factor
+      const up = new Uint8Array(nw * nh)
+      for (let y = 0; y < nh; y++) {
+        for (let x = 0; x < nw; x++) {
+          const fx = x / factor
+          const fy = y / factor
+          const x0 = Math.min(width - 1, Math.floor(fx))
+          const y0 = Math.min(height - 1, Math.floor(fy))
+          const x1 = Math.min(width - 1, x0 + 1)
+          const y1 = Math.min(height - 1, y0 + 1)
+          const tx = fx - x0
+          const ty = fy - y0
+          const v00 = mask[y0 * width + x0] ? 1 : 0
+          const v10 = mask[y0 * width + x1] ? 1 : 0
+          const v01 = mask[y1 * width + x0] ? 1 : 0
+          const v11 = mask[y1 * width + x1] ? 1 : 0
+          const v =
+            v00 * (1 - tx) * (1 - ty) +
+            v10 * tx * (1 - ty) +
+            v01 * (1 - tx) * ty +
+            v11 * tx * ty
+          up[y * nw + x] = v >= 0.5 ? 255 : 0
+        }
+      }
+      // Soften stairs at high res
+      let cur = up
+      for (let pass = 0; pass < 2; pass++) {
+        const acc = new Float32Array(nw * nh)
+        for (let y = 0; y < nh; y++) {
+          for (let x = 0; x < nw; x++) {
+            let sum = 0
+            let wt = 0
+            for (let dy = -1; dy <= 1; dy++) {
+              for (let dx = -1; dx <= 1; dx++) {
+                const nx = x + dx
+                const ny = y + dy
+                if (nx < 0 || ny < 0 || nx >= nw || ny >= nh) continue
+                const wgt = dx === 0 && dy === 0 ? 4 : dx === 0 || dy === 0 ? 2 : 1
+                sum += (cur[ny * nw + nx] ? 1 : 0) * wgt
+                wt += wgt
+              }
+            }
+            acc[y * nw + x] = sum / wt
+          }
+        }
+        const next = new Uint8Array(nw * nh)
+        for (let i = 0; i < nw * nh; i++) next[i] = acc[i] >= 0.45 ? 255 : 0
+        cur = next
+      }
+      workMask = cur
+      ww = nw
+      wh = nh
+    }
+
+    const lab = new Uint16Array(ww * wh)
+    for (let i = 0; i < ww * wh; i++) lab[i] = workMask[i] ? 0 : 0xffff
+    const raw = extractColorContours(
+      lab,
+      ww,
+      wh,
+      Math.max(4, minArea * factor * factor),
+    )
+    const components = raw.get(0) ?? []
+    if (!components.length) continue
+    out.set(
+      color,
+      components.map((rings) =>
+        rings
+          .map((ring) => processContour(ring, smoothness, factor))
+          .filter((ring) => ring.length >= 3),
+      ),
+    )
+  }
+  return out
 }
 
 function applyMergeMap(labels: Uint16Array, mergeMap: number[]): Uint16Array {
@@ -254,7 +416,13 @@ function stateToSvg(
   smoothness: number,
   minArea: number,
 ): { svg: string; regionCount: number } {
-  const contoursByColor = extractColorContours(labels, widthPx, heightPx, minArea)
+  const contoursByColor = extractSmoothColorContours(
+    labels,
+    widthPx,
+    heightPx,
+    minArea,
+    smoothness,
+  )
   const { regions } = labelRegions(labels, widthPx, heightPx)
 
   const legend = [...metaByIndex.values()]
@@ -278,11 +446,9 @@ function stateToSvg(
     const meta = metaByIndex.get(colorIndex)
     const pmsAttr = meta?.pmsCode ? ` data-pms="${meta.pmsCode}"` : ''
     for (const rings of components) {
-      const processed = rings
-        .map((ring) => processContour(ring, smoothness))
-        .filter((ring) => ring.length >= 3)
+      const processed = rings.filter((ring) => ring.length >= 3)
       if (!processed.length) continue
-      const d = ringsToSvgD(processed, smoothness > 0)
+      const d = ringsToSvgD(processed, smoothness > 0, 55)
       if (!d) continue
       parts.push(
         `<path fill="${fill}" fill-rule="evenodd" stroke="none"${pmsAttr} d="${d}" />`,
@@ -401,13 +567,17 @@ export async function vectorizeColors(
   const colorData = scaleToCanvas(source, settings.maxDim, false)
   knockOutNearWhite(colorData)
   knockOutNearBlackBackdrop(colorData)
+  // Gold/bronze dams → black metal slot (matches finished pin look).
+  remapMetalToBlack(colorData)
   const cw = colorData.width
   const ch = colorData.height
   // Higher fidelity for enamel cel art: keep thin black die-lines & highlights.
   const colorCount = Math.max(2, Math.min(32, settings.colorCount))
   const palette = extractPalette(colorData, colorCount, 1)
+  // Merge soft shade cousins FIRST, then pin a dedicated ink-black slot.
+  // (Doing black first made near-duplicate merge collapse browns/purples into pure black.)
+  mergeNearDuplicateColors(palette, 22)
   ensureBlackSlot(palette, colorData)
-  mergeNearDuplicateColors(palette, 28)
   let labels = quantizeImage(colorData, palette)
   labels = denoiseLabels(labels, cw, ch, 2)
 
@@ -464,9 +634,13 @@ function ensureBlackSlot(palette: Rgb[], imageData: ImageData) {
 /** Collapse near-identical enamel flats (kills hat grain / soft-shade speckles). */
 function mergeNearDuplicateColors(palette: Rgb[], maxDist: number) {
   for (let i = 0; i < palette.length; i++) {
+    const yi = 0.299 * palette[i].r + 0.587 * palette[i].g + 0.114 * palette[i].b
+    // Never merge into/from near-black — that wipes the whole pin to ink.
+    if (yi < 40) continue
     for (let j = i + 1; j < palette.length; j++) {
+      const yj = 0.299 * palette[j].r + 0.587 * palette[j].g + 0.114 * palette[j].b
+      if (yj < 40) continue
       if (colorDistance(palette[i], palette[j]) <= maxDist) {
-        // Pull j toward i (keep earlier / typically larger median-cut bucket)
         palette[j] = { ...palette[i] }
       }
     }

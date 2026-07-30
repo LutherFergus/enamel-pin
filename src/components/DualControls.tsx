@@ -16,7 +16,7 @@ export function DualControls({ settings, onChange, disabled }: Props) {
 
   return (
     <div>
-      <h2>Stroke outline (PNG)</h2>
+      <h2>Vector outline (SVG)</h2>
       <div className="field">
         <label>
           <span>Detail</span>
@@ -33,8 +33,8 @@ export function DualControls({ settings, onChange, disabled }: Props) {
         />
       </div>
       <p className="hint">
-        Line art keeps the ink itself (no double outlines). Color art strokes flat-fill
-        boundaries. Lower Detail = cleaner / fewer lines. Changes update the preview live.
+        Black hatch + gold dam edges from enamel mocks (or ink from line art).
+        Higher Detail keeps finer hatch. Preview updates live.
       </p>
       <div className="field">
         <label>
@@ -52,7 +52,7 @@ export function DualControls({ settings, onChange, disabled }: Props) {
         />
       </div>
       <p className="hint">
-        Default 2px. Thickens clean strokes only — never adds edge-detection noise.
+        Default 1px. Keeps hatch airy — raise only if die-lines need weight.
       </p>
 
       <h2>Color vector (SVG)</h2>
@@ -64,7 +64,7 @@ export function DualControls({ settings, onChange, disabled }: Props) {
         <input
           type="range"
           min={2}
-          max={16}
+          max={20}
           step={1}
           value={settings.vector.colorCount}
           disabled={disabled}
@@ -72,7 +72,7 @@ export function DualControls({ settings, onChange, disabled }: Props) {
         />
       </div>
       <p className="hint">
-        Like Vectorizer.AI — flatten to N colors, then merge swatches or reassign PMS below.
+        Flat enamel wells (default 14). Gold metal remaps to black. Updates live.
       </p>
 
       <label className="check-row">
