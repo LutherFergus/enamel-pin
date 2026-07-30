@@ -95,6 +95,7 @@ img {
 }
 
 @media (max-width: 880px) {
+  /* Full mobile dock rules live at end of file (must override later base rules). */
   .layout {
     grid-template-columns: 1fr;
   }
@@ -257,6 +258,109 @@ img {
   background-position: 0 0, 0 9px, 9px -9px, -9px 0;
   background-color: #faf7f0;
   overflow: hidden;
+}
+
+.preview-zoom-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+  overscroll-behavior: contain;
+}
+
+.preview-zoom-viewport.is-zoomed {
+  cursor: grab;
+}
+
+.preview-zoom-viewport:active {
+  cursor: grabbing;
+}
+
+.preview-zoom-layer {
+  position: absolute;
+  inset: 0;
+  transform-origin: center center;
+  will-change: transform;
+}
+
+.preview-stage .preview-zoom-layer > img,
+.preview-stage .preview-zoom-layer > svg {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  min-width: 0;
+  min-height: 0;
+  margin: auto;
+  object-fit: contain;
+  object-position: center;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+  filter: drop-shadow(0 10px 24px rgba(28, 25, 21, 0.18));
+  animation: fade-in 320ms ease both;
+}
+
+.preview-zoom-layer > .empty-state {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+}
+
+.preview-zoom-controls {
+  position: absolute;
+  right: 0.55rem;
+  bottom: 0.55rem;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.2rem;
+  border-radius: 999px;
+  background: rgba(255, 252, 246, 0.92);
+  border: 1px solid rgba(28, 25, 21, 0.1);
+  box-shadow: 0 8px 20px rgba(28, 25, 21, 0.12);
+  backdrop-filter: blur(8px);
+}
+
+.zoom-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.zoom-btn:hover:not(:disabled) {
+  background: rgba(15, 110, 86, 0.1);
+}
+
+.zoom-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.zoom-btn.zoom-fit {
+  width: auto;
+  min-width: 3.1rem;
+  padding: 0 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
 }
 
 .preview-stage svg,
@@ -658,3 +762,128 @@ img {
 }
 .save-shot-btn:disabled { opacity: 0.6; cursor: wait; }
 .save-shot-status { color: var(--muted, #6b6458); font-size: 0.78rem; }
+
+/* Mobile: keep the preview image persistently docked at the bottom of the screen.
+   Placed last so these rules override earlier base min-heights (e.g. 420px). */
+@media (max-width: 880px) {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    overflow: hidden;
+  }
+
+  .app {
+    width: min(100% - 1rem, 1180px);
+    /* svh avoids Safari toolbar eating the bottom of the docked preview */
+    height: 100svh;
+    max-height: 100svh;
+    margin: 0 auto;
+    padding: 0.65rem 0 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    box-sizing: border-box;
+  }
+
+  .hero {
+    flex-shrink: 0;
+    margin-bottom: 0.55rem;
+    max-width: none;
+    gap: 0.3rem;
+  }
+
+  .brand {
+    font-size: clamp(1.5rem, 6vw, 2rem);
+  }
+
+  .lede {
+    display: none;
+  }
+
+  .layout {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    grid-template-columns: 1fr;
+    gap: 0.55rem;
+  }
+
+  .layout > aside.panel,
+  .controls-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  .preview-panel {
+    flex: 0 0 auto;
+    position: sticky;
+    bottom: 0;
+    z-index: 40;
+    min-height: 0 !important;
+    height: min(42svh, 300px);
+    max-height: min(42svh, 300px);
+    margin: 0;
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -12px 32px rgba(28, 25, 21, 0.16);
+    /* Extra bottom pad so Safari chrome / home indicator don't clip the image */
+    padding: 0.65rem 0.75rem calc(0.85rem + env(safe-area-inset-bottom, 0px) + 8px);
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    grid-template-rows: unset;
+    backdrop-filter: blur(14px);
+  }
+
+  .preview-panel .meta-bar {
+    flex-shrink: 0;
+    gap: 0.3rem 0.6rem;
+  }
+
+  .preview-panel .status {
+    font-size: 0.72rem;
+    line-height: 1.3;
+  }
+
+  .preview-stage {
+    flex: 1 1 auto;
+    min-height: 0 !important;
+    height: auto;
+    position: relative;
+  }
+
+  .preview-stage .preview-zoom-layer > img,
+  .preview-stage .preview-zoom-layer > svg {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: none !important;
+    max-height: none !important;
+    object-fit: contain;
+    object-position: center;
+  }
+
+  .preview-zoom-controls {
+    right: 0.4rem;
+    bottom: 0.4rem;
+  }
+
+  .zoom-btn {
+    width: 2.15rem;
+    height: 2.15rem;
+  }
+
+  .empty-state {
+    padding: 0.75rem;
+  }
+
+  .empty-state h3 {
+    font-size: 1.15rem;
+  }
+}
