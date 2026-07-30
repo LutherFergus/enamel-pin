@@ -30,9 +30,9 @@ export type OutlineSettings = {
 }
 
 export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
-  /** High detail keeps black hatch + gold-dam edges from enamel mocks. */
-  sensitivity: 82,
-  /** 2px matches elephant outline plate weight (edge-based metal, not filled gold). */
+  /** Tuned on elephant BG→outline plate (black hatch + gold-dam edges). */
+  sensitivity: 70,
+  /** 2px matches elephant outline plate weight. */
   thickness: 2,
   invert: false,
   /** Match elephant production plates (2000×2000). */
@@ -353,9 +353,13 @@ function knockOutNearBlackBackdrop(imageData: ImageData) {
   }
   if (opaqueCorners < 2 || darkCorners < 2) return
   const avgCornerY = cornerY / opaqueCorners
-  const thresh = Math.min(72, Math.max(22, avgCornerY + 18))
+  const thresh = Math.min(85, Math.max(28, avgCornerY + 28))
 
-  for (let i = 0; i < width * height; i++) {
+  // Flood from the frame through low-chroma dark studio pixels only.
+  // Blanket threshold eats elephant shadows; flood keeps the subject.
+  const n = width * height
+  const cand = new Uint8Array(n)
+  for (let i = 0; i < n; i++) {
     const o = i * 4
     if (data[o + 3] < 16) continue
     const r = data[o]
@@ -363,9 +367,42 @@ function knockOutNearBlackBackdrop(imageData: ImageData) {
     const b = data[o + 2]
     const y = 0.299 * r + 0.587 * g + 0.114 * b
     const chroma = Math.max(r, g, b) - Math.min(r, g, b)
-    // Only knock out low-chroma dark backdrop — keep black linework on the pin.
-    // Slightly wider chroma for textured studio paper (Org shots).
-    if (y < thresh && chroma < 28) data[o + 3] = 0
+    if (y < thresh && chroma < 40) cand[i] = 1
+  }
+
+  const seen = new Uint8Array(n)
+  const stack: number[] = []
+  const pushBorder = (i: number) => {
+    if (!cand[i] || seen[i]) return
+    seen[i] = 1
+    stack.push(i)
+  }
+  for (let x = 0; x < width; x++) {
+    pushBorder(x)
+    pushBorder((height - 1) * width + x)
+  }
+  for (let y = 0; y < height; y++) {
+    pushBorder(y * width)
+    pushBorder(y * width + width - 1)
+  }
+
+  while (stack.length) {
+    const i = stack.pop()!
+    data[i * 4 + 3] = 0
+    const x = i % width
+    const y = (i / width) | 0
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue
+        const nx = x + dx
+        const ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue
+        const ni = ny * width + nx
+        if (!cand[ni] || seen[ni]) continue
+        seen[ni] = 1
+        stack.push(ni)
+      }
+    }
   }
 }
 
