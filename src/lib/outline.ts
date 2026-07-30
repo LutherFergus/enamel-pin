@@ -8,12 +8,10 @@ import {
 } from './contours'
 import {
   analyzeLineArt,
+  extractEnamelMetalMask,
   extractInkMask,
   inkPreserved,
-  dilate as dilateMask,
 } from './lineArt'
-import { denoiseLabels, extractPalette, quantizeImage } from './quantize'
-import { mergeSmallRegions } from './regions'
 import type { Rgb } from './types'
 
 export type OutlineSettings = {
@@ -32,10 +30,13 @@ export type OutlineSettings = {
 }
 
 export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
-  sensitivity: 60,
-  thickness: 1,
+  /** High detail keeps black hatch + gold-dam edges from enamel mocks. */
+  sensitivity: 82,
+  /** 2px matches elephant outline plate weight (edge-based metal, not filled gold). */
+  thickness: 2,
   invert: false,
-  maxDim: 1400,
+  /** Match elephant production plates (2000×2000). */
+  maxDim: 2000,
 }
 
 export type OutlineResult = {
@@ -69,15 +70,6 @@ function drawScaled(
   ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(source, 0, 0, w, h)
   return { canvas, ctx, w, h }
-}
-
-function colorCountFromSensitivity(sensitivity: number): number {
-  return Math.max(3, Math.min(10, Math.round(3 + (sensitivity / 100) * 7)))
-}
-
-function minRegionRatioFromSensitivity(sensitivity: number): number {
-  const t = 1 - sensitivity / 100
-  return 0.0012 + t * 0.006
 }
 
 function processOutlineContour(points: Point[], scale: number): Point[] {
@@ -259,7 +251,8 @@ async function maskToOutlineResult(
 /**
  * Outline (vector SVG + PNG):
  * - Line art → keep the ink itself (no boundary-around-strokes noise)
- * - Color art → posterize → single-pixel die-lines between fills
+ * - Enamel pin mocks → black hatch + gold-dam edges (not filled gold)
+ *   (never color-boundary hollow double lines)
  * Paths are cubic-smoothed — not pixel stairs.
  */
 export async function extractOutlinePng(
@@ -270,6 +263,7 @@ export async function extractOutlinePng(
   const probeData = probe.ctx.getImageData(0, 0, probe.w, probe.h)
   const analysis = analyzeLineArt(probeData)
   knockOutLightBackground(probeData)
+  knockOutNearBlackBackdrop(probeData)
   probe.ctx.putImageData(probeData, 0, 0)
 
   if (analysis.isLineArt) {
@@ -286,29 +280,28 @@ export async function extractOutlinePng(
     )
   }
 
-  const { canvas, ctx, w, h } = drawScaled(source, settings.maxDim, true)
-  const imageData = ctx.getImageData(0, 0, w, h)
-  knockOutLightBackground(imageData)
-  knockOutNearBlackBackdrop(imageData)
+  // Painted enamel mock: black hatch + gold-dam edges (not filled gold blobs).
+  const metal = extractEnamelMetalMask(probeData, settings.sensitivity)
+  let mask = inkPreserved(metal.mask, metal.width, metal.height, settings.thickness)
+  // Drop isolated freckles from textured photo bg leftovers.
+  const minStroke = Math.max(24, Math.round(Math.min(probe.w, probe.h) * 0.01))
+  mask = keepLargeComponents(mask, probe.w, probe.h, minStroke)
+  // Org studio shots leave grain on the frame — drop ink that only touches the border.
+  mask = removeBorderTouchingComponents(
+    mask,
+    probe.w,
+    probe.h,
+    Math.round(probe.w * probe.h * 0.004),
+  )
 
-  const colors = colorCountFromSensitivity(settings.sensitivity)
-  const palette = extractPalette(imageData, colors, 2)
-  let labels = quantizeImage(imageData, palette)
-  labels = denoiseLabels(labels, w, h, 4)
-  const minArea = Math.max(48, Math.round(w * h * minRegionRatioFromSensitivity(settings.sensitivity)))
-  labels = mergeSmallRegions(labels, w, h, minArea)
-  labels = denoiseLabels(labels, w, h, 2)
-
-  let mask = singlePixelBoundaryMask(labels, w, h)
-  const minStroke = Math.max(18, Math.round(Math.min(w, h) * 0.02))
-  mask = keepLargeComponents(mask, w, h, minStroke)
-
-  const thickness = Math.max(1, Math.min(6, Math.round(settings.thickness)))
-  if (thickness > 1) {
-    mask = dilateMask(mask, w, h, thickness - 1)
-  }
-
-  return maskToOutlineResult(canvas, ctx, mask, w, h, settings.invert)
+  return maskToOutlineResult(
+    probe.canvas,
+    probe.ctx,
+    mask,
+    probe.w,
+    probe.h,
+    settings.invert,
+  )
 }
 
 function knockOutLightBackground(imageData: ImageData) {
@@ -332,7 +325,7 @@ function knockOutLightBackground(imageData: ImageData) {
   for (let i = 0; i < width * height; i++) {
     const o = i * 4
     if (data[o + 3] < 16) continue
-    if (data[o] >= 245 && data[o + 1] >= 245 && data[o + 2] >= 245) {
+    if (data[o] >= 235 && data[o + 1] >= 235 && data[o + 2] >= 235) {
       data[o + 3] = 0
     }
   }
@@ -346,48 +339,34 @@ function knockOutNearBlackBackdrop(imageData: ImageData) {
     (height - 1) * width * 4,
     ((height - 1) * width + width - 1) * 4,
   ]
-  let blackCorners = 0
+  // Org pin mocks sit on dark textured studio gray (~30–55), not pure black.
+  // Transparent corners (already-matted art) must NOT count as dark backdrop.
+  let darkCorners = 0
+  let opaqueCorners = 0
+  let cornerY = 0
   for (const o of corners) {
     if (data[o + 3] < 16) continue
-    if (data[o] < 18 && data[o + 1] < 18 && data[o + 2] < 18) blackCorners++
+    opaqueCorners++
+    const y = 0.299 * data[o] + 0.587 * data[o + 1] + 0.114 * data[o + 2]
+    cornerY += y
+    if (y < 70) darkCorners++
   }
-  if (blackCorners < 2) return
+  if (opaqueCorners < 2 || darkCorners < 2) return
+  const avgCornerY = cornerY / opaqueCorners
+  const thresh = Math.min(72, Math.max(22, avgCornerY + 18))
 
   for (let i = 0; i < width * height; i++) {
     const o = i * 4
     if (data[o + 3] < 16) continue
-    if (data[o] < 14 && data[o + 1] < 14 && data[o + 2] < 14) data[o + 3] = 0
+    const r = data[o]
+    const g = data[o + 1]
+    const b = data[o + 2]
+    const y = 0.299 * r + 0.587 * g + 0.114 * b
+    const chroma = Math.max(r, g, b) - Math.min(r, g, b)
+    // Only knock out low-chroma dark backdrop — keep black linework on the pin.
+    // Slightly wider chroma for textured studio paper (Org shots).
+    if (y < thresh && chroma < 28) data[o + 3] = 0
   }
-}
-
-/**
- * True single-pixel die-lines.
- * - Opaque↔opaque: mark only on the left/top side of the seam
- * - Opaque↔empty: also mark left/top silhouette edges
- */
-function singlePixelBoundaryMask(labels: Uint16Array, w: number, h: number): Uint8Array {
-  const mask = new Uint8Array(w * h)
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = y * w + x
-      const v = labels[i]
-      if (v === 0xffff) continue
-
-      const right = x + 1 < w ? labels[i + 1] : 0xffff
-      const down = y + 1 < h ? labels[i + w] : 0xffff
-      const left = x > 0 ? labels[i - 1] : 0xffff
-      const up = y > 0 ? labels[i - w] : 0xffff
-
-      if (right !== v || down !== v) {
-        mask[i] = 255
-        continue
-      }
-      if (left === 0xffff || up === 0xffff) {
-        mask[i] = 255
-      }
-    }
-  }
-  return mask
 }
 
 function keepLargeComponents(
@@ -429,6 +408,58 @@ function keepLargeComponents(
 
     if (component.length >= minPixels) {
       for (const i of component) out[i] = 255
+    }
+  }
+
+  return out
+}
+
+/**
+ * Drop ink components that touch the image border and are smaller than
+ * `maxPixels`. Removes studio-bg freckles without eating the centered subject
+ * (elephant / pin art rarely touches the frame).
+ */
+function removeBorderTouchingComponents(
+  mask: Uint8Array,
+  w: number,
+  h: number,
+  maxPixels: number,
+): Uint8Array {
+  const seen = new Uint8Array(w * h)
+  const out = new Uint8Array(mask)
+  const stack: number[] = []
+
+  for (let start = 0; start < w * h; start++) {
+    if (!out[start] || seen[start]) continue
+
+    stack.length = 0
+    stack.push(start)
+    seen[start] = 1
+    const component: number[] = []
+    let touchesBorder = false
+
+    while (stack.length) {
+      const i = stack.pop()!
+      component.push(i)
+      const x = i % w
+      const y = (i / w) | 0
+      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) touchesBorder = true
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue
+          const nx = x + dx
+          const ny = y + dy
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+          const ni = ny * w + nx
+          if (!out[ni] || seen[ni]) continue
+          seen[ni] = 1
+          stack.push(ni)
+        }
+      }
+    }
+
+    if (touchesBorder && component.length <= maxPixels) {
+      for (const i of component) out[i] = 0
     }
   }
 

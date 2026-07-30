@@ -174,13 +174,6 @@ export default function App() {
     return () => window.clearTimeout(handle)
   }, [sourceImage, settings, runPipeline])
 
-  const onApply = useCallback(() => {
-    if (!sourceImage) return
-    setMerges([])
-    setPmsOverrides({})
-    void runPipeline(sourceImage, settings, [], {})
-  }, [runPipeline, settings, sourceImage])
-
   const onMergesChange = useCallback(
     async (nextMerges: Array<[number, number]>) => {
       setMerges(nextMerges)
@@ -284,14 +277,6 @@ export default function App() {
           <div className="actions">
             <button
               type="button"
-              className="btn btn-primary"
-              onClick={onApply}
-              disabled={!sourceImage || busy}
-            >
-              {busy ? 'Processing…' : 'Reprocess'}
-            </button>
-            <button
-              type="button"
               className="btn btn-secondary"
               onClick={downloadOutline}
               disabled={!result || busy}
@@ -307,6 +292,9 @@ export default function App() {
               Download vector SVG
             </button>
           </div>
+          <p className="hint" style={{ marginTop: '0.5rem' }}>
+            Preview updates automatically when you move any slider — no reprocess button.
+          </p>
         </aside>
 
         <section className="panel preview-panel">

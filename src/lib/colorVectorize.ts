@@ -1,6 +1,6 @@
 import { collapseCollinear, destairPath, extractColorContours, ringsToSvgD, simplifyPath } from './contours'
 import type { Point } from './contours'
-import { analyzeLineArt, extractInkMask } from './lineArt'
+import { analyzeLineArt, extractInkMask, remapMetalToBlack } from './lineArt'
 import { findPmsByCode, nearestPms, snapPaletteToPms } from './pms'
 import { denoiseLabels, extractPalette, quantizeImage } from './quantize'
 import { labelRegions, mergeSmallRegions } from './regions'
@@ -18,10 +18,10 @@ export type ColorVectorSettings = {
 }
 
 export const DEFAULT_COLOR_VECTOR_SETTINGS: ColorVectorSettings = {
-  colorCount: 12,
-  minRegionRatio: 0.0002,
+  colorCount: 14,
+  minRegionRatio: 0.0001,
   smoothness: 3,
-  maxDim: 1200,
+  maxDim: 2000,
   snapToPms: true,
 }
 
@@ -72,13 +72,13 @@ function knockOutNearWhite(imageData: ImageData) {
   const { data } = imageData
   for (let i = 0; i < data.length; i += 4) {
     if (data[i + 3] < 16) continue
-    if (data[i] >= 245 && data[i + 1] >= 245 && data[i + 2] >= 245) {
+    if (data[i] >= 235 && data[i + 1] >= 235 && data[i + 2] >= 235) {
       data[i + 3] = 0
     }
   }
 }
 
-/** Drop solid black backdrops (common on finished pin mockups). */
+/** Drop solid black / dark studio backdrops (common on finished pin mockups). */
 function knockOutNearBlackBackdrop(imageData: ImageData) {
   const { data, width, height } = imageData
   const corners = [
@@ -87,19 +87,29 @@ function knockOutNearBlackBackdrop(imageData: ImageData) {
     (height - 1) * width * 4,
     ((height - 1) * width + width - 1) * 4,
   ]
-  let blackCorners = 0
+  let darkCorners = 0
+  let opaqueCorners = 0
+  let cornerY = 0
   for (const o of corners) {
     if (data[o + 3] < 16) continue
-    if (data[o] < 18 && data[o + 1] < 18 && data[o + 2] < 18) blackCorners++
+    opaqueCorners++
+    const y = 0.299 * data[o] + 0.587 * data[o + 1] + 0.114 * data[o + 2]
+    cornerY += y
+    if (y < 70) darkCorners++
   }
-  if (blackCorners < 2) return
+  if (opaqueCorners < 2 || darkCorners < 2) return
+  const avgCornerY = cornerY / opaqueCorners
+  const thresh = Math.min(72, Math.max(22, avgCornerY + 18))
 
   for (let i = 0; i < width * height; i++) {
     const o = i * 4
     if (data[o + 3] < 16) continue
-    if (data[o] < 14 && data[o + 1] < 14 && data[o + 2] < 14) {
-      data[o + 3] = 0
-    }
+    const r = data[o]
+    const g = data[o + 1]
+    const b = data[o + 2]
+    const y = 0.299 * r + 0.587 * g + 0.114 * b
+    const chroma = Math.max(r, g, b) - Math.min(r, g, b)
+    if (y < thresh && chroma < 28) data[o + 3] = 0
   }
 }
 
@@ -520,6 +530,8 @@ export async function vectorizeColors(
   const colorData = scaleToCanvas(source, settings.maxDim, false)
   knockOutNearWhite(colorData)
   knockOutNearBlackBackdrop(colorData)
+  // Gold/bronze dams → black metal slot (matches finished pin look).
+  remapMetalToBlack(colorData)
   const cw = colorData.width
   const ch = colorData.height
   // Higher fidelity for enamel cel art: keep thin black die-lines & highlights.

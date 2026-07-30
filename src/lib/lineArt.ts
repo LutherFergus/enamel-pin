@@ -130,6 +130,126 @@ export function extractInkMask(
 }
 
 /**
+ * Enamel-pin mock → die-line mask (matches human Org→Outline plates).
+ *
+ * Painted mocks show raised gold dams + black hatch. The outline plate is NOT
+ * filled gold — it is:
+ *   1. black / charcoal linework (kept as filled ink)
+ *   2. morphological *edges* of gold/bronze dams (thin metal walls)
+ *
+ * Filling gold blobs over-inks (~40% cover vs ~24% on elephant plates) and
+ * kills hatch. Never boundary-trace enamel color cells (hollow double lines).
+ *
+ * `sensitivity` 0–100: higher keeps lighter gray hatch + softer gold edges.
+ */
+export function extractEnamelMetalMask(
+  imageData: ImageData,
+  sensitivity = 80,
+): InkMask {
+  const { data, width, height } = imageData
+  const analysis = analyzeLineArt(imageData)
+  const t = Math.max(0, Math.min(100, sensitivity)) / 100
+
+  // Black linework threshold (higher sensitivity → keep lighter gray hatch)
+  const blackY = 48 + t * 70
+  // Gold/bronze metal — looser at high sensitivity
+  const goldRMin = 130 - t * 35
+  const goldGMin = 85 - t * 25
+  const goldBMax = 140 + t * 30
+
+  const black = new Uint8Array(width * height)
+  const gold = new Uint8Array(width * height)
+  let inkPx = 0
+  for (let i = 0; i < width * height; i++) {
+    const o = i * 4
+    if (data[o + 3] < 16) continue
+    const r = data[o]
+    const g = data[o + 1]
+    const b = data[o + 2]
+    const y = luma(r, g, b)
+    const chroma = Math.max(r, g, b) - Math.min(r, g, b)
+
+    // Structural black / charcoal linework (low chroma dark)
+    if (y <= blackY && chroma < 55) {
+      black[i] = 255
+      inkPx++
+      continue
+    }
+    // Gold / bronze dams — used for EDGES only (not filled)
+    if (
+      r >= goldRMin &&
+      g >= goldGMin &&
+      b <= goldBMax &&
+      r > b + 28 &&
+      g > b + 12 &&
+      y < 210 &&
+      chroma > 28
+    ) {
+      gold[i] = 255
+    }
+  }
+
+  // Morphological gradient → thin metal wall around each gold dam.
+  const goldDil = dilate(gold, width, height, 1)
+  const goldEro = erode(gold, width, height, 1)
+  const goldEdge = new Uint8Array(width * height)
+  for (let i = 0; i < width * height; i++) {
+    if (goldDil[i] !== goldEro[i]) goldEdge[i] = 255
+  }
+
+  // Close 1px gaps in black hatch, then union with gold dam edges.
+  let mask = dilate(black, width, height, 1)
+  mask = erode(mask, width, height, 1)
+  for (let i = 0; i < width * height; i++) {
+    if (goldEdge[i]) mask[i] = 255
+  }
+
+  mask = removeSmallComponents(
+    mask,
+    width,
+    height,
+    Math.max(8, Math.round((width * height) / 90000)),
+  )
+
+  return {
+    mask,
+    width,
+    height,
+    isLineArt: false,
+    darkRatio: inkPx / (width * height),
+    midRatio: analysis.midRatio,
+  }
+}
+
+/** Remap gold/bronze metal pixels to near-black (for color quantization). */
+export function remapMetalToBlack(imageData: ImageData) {
+  const { data } = imageData
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 16) continue
+    const r = data[i]
+    const g = data[i + 1]
+    const b = data[i + 2]
+    const y = luma(r, g, b)
+    const chroma = Math.max(r, g, b) - Math.min(r, g, b)
+    const isGold =
+      r >= 120 &&
+      g >= 80 &&
+      b <= 150 &&
+      r > b + 28 &&
+      g > b + 12 &&
+      y < 210 &&
+      chroma > 28
+    const isBrownMetal =
+      y < 110 && r > g && g >= b && r - b > 25 && chroma > 20 && chroma < 90
+    if (isGold || isBrownMetal) {
+      data[i] = 18
+      data[i + 1] = 16
+      data[i + 2] = 14
+    }
+  }
+}
+
+/**
  * Adjust ink stroke weight toward a target thickness (px).
  * Uses skeleton → dilate so weight is even (enamel-friendly), while keeping topology.
  */
