@@ -1,6 +1,6 @@
 /**
- * Moore neighborhood contour tracing for quantized label maps.
- * Returns closed rings as point lists in pixel space (pixel centers).
+ * Pixel-edge contour tracing for quantized label maps / ink masks.
+ * Returns closed rings as point lists in pixel-corner space.
  */
 
 export type Point = { x: number; y: number }
@@ -22,17 +22,17 @@ function isForeground(
 }
 
 /**
- * Extract outer contours for each color's connected components.
- * Uses pixel-edge chaining (robust) instead of Moore walks that can collapse
- * large enamel fills into tiny speck paths.
+ * Extract contours for each color's connected components.
+ * Returns Map<colorIndex, components> where each component is
+ * Point[][] = [outerRing, ...holes] for even-odd SVG fills.
  */
 export function extractColorContours(
   labels: Uint16Array,
   width: number,
   height: number,
   minArea = 24,
-): Map<number, Point[][]> {
-  const contoursByColor = new Map<number, Point[][]>()
+): Map<number, Point[][][]> {
+  const contoursByColor = new Map<number, Point[][][]>()
   const visited = new Uint8Array(width * height)
 
   for (let y = 0; y < height; y++) {
@@ -67,11 +67,11 @@ export function extractColorContours(
 
       if (component.length < minArea) continue
 
-      const contour = contourFromComponent(component, labels, width, height, color)
-      if (!contour || contour.length < 3) continue
+      const rings = ringsFromComponent(component, labels, width, height, color)
+      if (!rings.length) continue
 
       const list = contoursByColor.get(color) ?? []
-      list.push(contour)
+      list.push(rings)
       contoursByColor.set(color, list)
     }
   }
@@ -80,17 +80,15 @@ export function extractColorContours(
 }
 
 /**
- * Build the outer ring by chaining unit edges around a filled component.
- * Coordinates are pixel corners (integer), then shifted to centers for SVG.
+ * Build all closed rings (outer + holes) by chaining unit edges around ink/fill.
  */
-function contourFromComponent(
+function ringsFromComponent(
   component: number[],
   labels: Uint16Array,
   width: number,
   height: number,
   color: number,
-): Point[] | null {
-  // Directed edges keyed by "x1,y1" → list of "x2,y2"
+): Point[][] {
   const outs = new Map<string, string[]>()
   const addEdge = (x1: number, y1: number, x2: number, y2: number) => {
     const a = `${x1},${y1}`
@@ -103,32 +101,18 @@ function contourFromComponent(
   for (const p of component) {
     const x = p % width
     const y = (p / width) | 0
-    // Top edge (left → right) if above is empty
-    if (!isForeground(labels, width, height, x, y - 1, color)) {
-      addEdge(x, y, x + 1, y)
-    }
-    // Right edge (top → bottom) if right is empty
-    if (!isForeground(labels, width, height, x + 1, y, color)) {
-      addEdge(x + 1, y, x + 1, y + 1)
-    }
-    // Bottom edge (right → left) if below is empty
-    if (!isForeground(labels, width, height, x, y + 1, color)) {
-      addEdge(x + 1, y + 1, x, y + 1)
-    }
-    // Left edge (bottom → top) if left is empty
-    if (!isForeground(labels, width, height, x - 1, y, color)) {
-      addEdge(x, y + 1, x, y)
-    }
+    if (!isForeground(labels, width, height, x, y - 1, color)) addEdge(x, y, x + 1, y)
+    if (!isForeground(labels, width, height, x + 1, y, color)) addEdge(x + 1, y, x + 1, y + 1)
+    if (!isForeground(labels, width, height, x, y + 1, color)) addEdge(x + 1, y + 1, x, y + 1)
+    if (!isForeground(labels, width, height, x - 1, y, color)) addEdge(x, y + 1, x, y)
   }
 
-  if (outs.size === 0) return null
-
-  // Prefer the longest loop (outer boundary vs holes)
-  let best: Point[] | null = null
+  if (outs.size === 0) return []
 
   const unused = new Map<string, string[]>()
   for (const [k, v] of outs) unused.set(k, [...v])
 
+  const rings: Point[][] = []
   while (unused.size) {
     const start = unused.keys().next().value as string
     const ring: Point[] = []
@@ -150,15 +134,11 @@ function contourFromComponent(
       if (cur === start) break
     }
 
-    if (ring.length >= 3 && (!best || ring.length > best.length)) {
-      best = ring
-    }
+    if (ring.length >= 4) rings.push(ring)
   }
 
-  if (!best) return null
-
-  // Convert corner coords to a stable path; keep as corner grid (crisper fills)
-  return best
+  rings.sort((a, b) => b.length - a.length)
+  return rings
 }
 
 /** Ramer–Douglas–Peucker simplification. */
@@ -205,7 +185,6 @@ export function smoothPath(points: Point[], iterations: number): Point[] {
     if (pts.length < 3) break
     const next: Point[] = []
     const n = pts.length
-    // Treat as closed ring
     for (let i = 0; i < n; i++) {
       const a = pts[i]
       const b = pts[(i + 1) % n]
@@ -232,6 +211,14 @@ export function pathToSvgD(points: Point[], closed = true): string {
   }
   if (closed) d += ' Z'
   return d
+}
+
+/** Join outer + hole rings into one evenodd path `d`. */
+export function ringsToSvgD(rings: Point[][]): string {
+  return rings
+    .map((ring) => pathToSvgD(ring, true))
+    .filter(Boolean)
+    .join(' ')
 }
 
 function fmt(n: number): string {

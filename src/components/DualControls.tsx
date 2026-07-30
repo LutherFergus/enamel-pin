@@ -33,8 +33,8 @@ export function DualControls({ settings, onChange, disabled }: Props) {
         />
       </div>
       <p className="hint">
-        Lower = fewer flat fills = cleaner single die-lines. Higher adds more internal
-        separations. No photo-edge noise.
+        Line art keeps the ink itself (no double outlines). Color art strokes flat-fill
+        boundaries. Lower Detail = cleaner / fewer lines.
       </p>
       <div className="field">
         <label>
@@ -52,8 +52,7 @@ export function DualControls({ settings, onChange, disabled }: Props) {
         />
       </div>
       <p className="hint">
-        1px = thinnest die-line; 2px is the default metal weight. Higher values thicken the
-        clean boundary strokes only (transparent PNG).
+        Default 2px. Thickens clean strokes only — never adds edge-detection noise.
       </p>
 
       <h2>Color vector (SVG)</h2>

@@ -1,15 +1,21 @@
+import {
+  analyzeLineArt,
+  extractInkMask,
+  inkPreserved,
+  dilate as dilateMask,
+} from './lineArt'
 import { denoiseLabels, extractPalette, quantizeImage } from './quantize'
 import { mergeSmallRegions } from './regions'
 import type { Rgb } from './types'
 
 export type OutlineSettings = {
   /**
-   * Detail 0–100 → how many flat colors to split into before stroking.
-   * Lower = fewer regions = cleaner, fewer die-lines.
-   * Higher = more internal single-line separations.
+   * Detail 0–100.
+   * Color art: how many flat fills before stroking boundaries.
+   * Line art: ink threshold (higher keeps lighter gray strokes).
    */
   sensitivity: number
-  /** Stroke thickness in pixels (1 = true single-pixel die-line). */
+  /** Stroke thickness in pixels (default 2). */
   thickness: number
   /** Invert: white strokes on transparent instead of black. */
   invert: boolean
@@ -34,6 +40,7 @@ export type OutlineResult = {
 function drawScaled(
   source: HTMLImageElement | ImageBitmap,
   maxDim: number,
+  smooth: boolean,
 ): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; w: number; h: number } {
   const srcW = 'naturalWidth' in source ? source.naturalWidth : source.width
   const srcH = 'naturalHeight' in source ? source.naturalHeight : source.height
@@ -44,60 +51,32 @@ function drawScaled(
   canvas.width = w
   canvas.height = h
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!
-  // Soft scale reduces generative/photo grit before posterize
-  ctx.imageSmoothingEnabled = true
+  // Line art: nearest-neighbor keeps strokes crisp. Color art: smooth then posterize.
+  ctx.imageSmoothingEnabled = smooth
   ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(source, 0, 0, w, h)
   return { canvas, ctx, w, h }
 }
 
 function colorCountFromSensitivity(sensitivity: number): number {
-  // 0 → 3 colors, 50 → 6, 100 → 10
   return Math.max(3, Math.min(10, Math.round(3 + (sensitivity / 100) * 7)))
 }
 
 function minRegionRatioFromSensitivity(sensitivity: number): number {
-  // Lower sensitivity → more aggressive speck cleanup
   const t = 1 - sensitivity / 100
   return 0.0012 + t * 0.006
 }
 
-/**
- * Clean enamel-pin die-line outline:
- * posterize to flat fills → stroke ONLY region boundaries as single-pixel lines.
- * No Sobel / photo-edge noise.
- */
-export async function extractOutlinePng(
-  source: HTMLImageElement | ImageBitmap,
-  settings: OutlineSettings,
+function maskToOutlineResult(
+  canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D,
+  mask: Uint8Array,
+  w: number,
+  h: number,
+  invert: boolean,
 ): Promise<OutlineResult> {
-  const { canvas, ctx, w, h } = drawScaled(source, settings.maxDim)
-  const imageData = ctx.getImageData(0, 0, w, h)
-
-  knockOutLightBackground(imageData)
-
-  const colors = colorCountFromSensitivity(settings.sensitivity)
-  const palette = extractPalette(imageData, colors, 2)
-  let labels = quantizeImage(imageData, palette)
-  labels = denoiseLabels(labels, w, h, 4)
-  const minArea = Math.max(48, Math.round(w * h * minRegionRatioFromSensitivity(settings.sensitivity)))
-  labels = mergeSmallRegions(labels, w, h, minArea)
-  labels = denoiseLabels(labels, w, h, 2)
-
-  // Single-pixel die-lines only (one side of each boundary)
-  let mask = singlePixelBoundaryMask(labels, w, h)
-
-  // Drop speck strokes / freckles that aren't real die-lines
-  const minStroke = Math.max(18, Math.round(Math.min(w, h) * 0.02))
-  mask = keepLargeComponents(mask, w, h, minStroke)
-
-  const thickness = Math.max(1, Math.min(6, Math.round(settings.thickness)))
-  if (thickness > 1) {
-    mask = dilate(mask, w, h, thickness - 1)
-  }
-
   const out = ctx.createImageData(w, h)
-  const stroke: Rgb = settings.invert
+  const stroke: Rgb = invert
     ? { r: 255, g: 255, b: 255 }
     : { r: 18, g: 16, b: 14 }
 
@@ -119,19 +98,78 @@ export async function extractOutlinePng(
   ctx.clearRect(0, 0, w, h)
   ctx.putImageData(out, 0, 0)
 
-  const pngBlob = await new Promise<Blob>((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     canvas.toBlob(
-      (b) => (b ? resolve(b) : reject(new Error('Failed to encode outline PNG'))),
+      (b) => {
+        if (!b) {
+          reject(new Error('Failed to encode outline PNG'))
+          return
+        }
+        resolve({
+          pngBlob: b,
+          pngUrl: URL.createObjectURL(b),
+          widthPx: w,
+          heightPx: h,
+        })
+      },
       'image/png',
     )
   })
+}
 
-  return {
-    pngBlob,
-    pngUrl: URL.createObjectURL(pngBlob),
-    widthPx: w,
-    heightPx: h,
+/**
+ * Outline PNG:
+ * - Line art → keep the ink itself (no boundary-around-strokes noise)
+ * - Color art → posterize → single-pixel die-lines between fills
+ */
+export async function extractOutlinePng(
+  source: HTMLImageElement | ImageBitmap,
+  settings: OutlineSettings,
+): Promise<OutlineResult> {
+  // Probe at working size with smoothing off first for line-art detection
+  const probe = drawScaled(source, settings.maxDim, false)
+  const probeData = probe.ctx.getImageData(0, 0, probe.w, probe.h)
+  // Detect BEFORE knocking out paper (transparent-as-light also covers post-knockout).
+  const analysis = analyzeLineArt(probeData)
+  knockOutLightBackground(probeData)
+  probe.ctx.putImageData(probeData, 0, 0)
+
+  if (analysis.isLineArt) {
+    const ink = extractInkMask(probeData, settings.sensitivity)
+    const mask = inkPreserved(ink.mask, ink.width, ink.height, settings.thickness)
+    return maskToOutlineResult(
+      probe.canvas,
+      probe.ctx,
+      mask,
+      probe.w,
+      probe.h,
+      settings.invert,
+    )
   }
+
+  // Color / enamel artwork path
+  const { canvas, ctx, w, h } = drawScaled(source, settings.maxDim, true)
+  const imageData = ctx.getImageData(0, 0, w, h)
+  knockOutLightBackground(imageData)
+
+  const colors = colorCountFromSensitivity(settings.sensitivity)
+  const palette = extractPalette(imageData, colors, 2)
+  let labels = quantizeImage(imageData, palette)
+  labels = denoiseLabels(labels, w, h, 4)
+  const minArea = Math.max(48, Math.round(w * h * minRegionRatioFromSensitivity(settings.sensitivity)))
+  labels = mergeSmallRegions(labels, w, h, minArea)
+  labels = denoiseLabels(labels, w, h, 2)
+
+  let mask = singlePixelBoundaryMask(labels, w, h)
+  const minStroke = Math.max(18, Math.round(Math.min(w, h) * 0.02))
+  mask = keepLargeComponents(mask, w, h, minStroke)
+
+  const thickness = Math.max(1, Math.min(6, Math.round(settings.thickness)))
+  if (thickness > 1) {
+    mask = dilateMask(mask, w, h, thickness - 1)
+  }
+
+  return maskToOutlineResult(canvas, ctx, mask, w, h, settings.invert)
 }
 
 /** Treat very light backdrop as transparent so the outer die-line hugs the pin. */
@@ -236,26 +274,5 @@ function keepLargeComponents(
     }
   }
 
-  return out
-}
-
-function dilate(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
-  if (radius <= 0) return mask
-  const out = new Uint8Array(mask)
-  const r2 = radius * radius
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      if (!mask[y * w + x]) continue
-      for (let dy = -radius; dy <= radius; dy++) {
-        for (let dx = -radius; dx <= radius; dx++) {
-          if (dx * dx + dy * dy > r2) continue
-          const nx = x + dx
-          const ny = y + dy
-          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
-          out[ny * w + nx] = 255
-        }
-      }
-    }
-  }
   return out
 }

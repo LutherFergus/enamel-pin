@@ -1,5 +1,6 @@
-import { extractColorContours, pathToSvgD, simplifyPath, smoothPath } from './contours'
+import { extractColorContours, ringsToSvgD, simplifyPath, smoothPath } from './contours'
 import type { Point } from './contours'
+import { analyzeLineArt, extractInkMask } from './lineArt'
 import { findPmsByCode, nearestPms, snapPaletteToPms } from './pms'
 import { denoiseLabels, extractPalette, quantizeImage } from './quantize'
 import { labelRegions, mergeSmallRegions } from './regions'
@@ -50,6 +51,7 @@ export type ColorVectorResult = {
 function scaleToCanvas(
   source: HTMLImageElement | ImageBitmap,
   maxDim: number,
+  smooth = true,
 ): ImageData {
   const srcW = 'naturalWidth' in source ? source.naturalWidth : source.width
   const srcH = 'naturalHeight' in source ? source.naturalHeight : source.height
@@ -60,17 +62,30 @@ function scaleToCanvas(
   canvas.width = w
   canvas.height = h
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!
+  ctx.imageSmoothingEnabled = smooth
+  ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(source, 0, 0, w, h)
   return ctx.getImageData(0, 0, w, h)
 }
 
+function knockOutNearWhite(imageData: ImageData) {
+  const { data } = imageData
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 16) continue
+    if (data[i] >= 245 && data[i + 1] >= 245 && data[i + 2] >= 245) {
+      data[i + 3] = 0
+    }
+  }
+}
+
 function processContour(points: Point[], smoothness: number): Point[] {
+  // smoothness 0 → orthogonal pixel edges only (no RDP) so thin ink ribbons
+  // stay solid instead of collapsing into hollow / self-intersecting paths.
+  if (smoothness <= 0) return points
   const epsilon = 0.55 + (5 - Math.min(5, smoothness)) * 0.12
   let pts = simplifyPath(points, epsilon)
-  if (smoothness > 0) {
-    pts = smoothPath(pts, smoothness)
-    pts = simplifyPath(pts, Math.max(0.25, epsilon * 0.5))
-  }
+  pts = smoothPath(pts, smoothness)
+  pts = simplifyPath(pts, Math.max(0.25, epsilon * 0.5))
   return pts
 }
 
@@ -233,16 +248,20 @@ function stateToSvg(
   ]
 
   let drawn = 0
-  for (const [colorIndex, contours] of contoursByColor) {
+  for (const [colorIndex, components] of contoursByColor) {
     const fill = rgbToHex(fillRgb[colorIndex])
     const meta = metaByIndex.get(colorIndex)
     const pmsAttr = meta?.pmsCode ? ` data-pms="${meta.pmsCode}"` : ''
-    for (const contour of contours) {
-      const pts = processContour(contour, smoothness)
-      if (pts.length < 3) continue
-      const d = pathToSvgD(pts)
+    for (const rings of components) {
+      const processed = rings
+        .map((ring) => processContour(ring, smoothness))
+        .filter((ring) => ring.length >= 3)
+      if (!processed.length) continue
+      const d = ringsToSvgD(processed)
       if (!d) continue
-      parts.push(`<path fill="${fill}" stroke="none"${pmsAttr} d="${d}" />`)
+      parts.push(
+        `<path fill="${fill}" fill-rule="evenodd" stroke="none"${pmsAttr} d="${d}" />`,
+      )
       drawn++
     }
   }
@@ -309,6 +328,7 @@ function assemble(
 
 /**
  * Vectorizer.AI-style flat color vectorization with optional PMS snapping.
+ * Line art is handled as black ink fills (never boundary-traced into double lines).
  */
 export async function vectorizeColors(
   source: HTMLImageElement | ImageBitmap,
@@ -316,19 +336,57 @@ export async function vectorizeColors(
   merges: Array<[number, number]> = [],
   overrides: PmsOverrides = {},
 ): Promise<ColorVectorResult> {
-  const imageData = scaleToCanvas(source, settings.maxDim)
+  // Crisp nearest-neighbor first — needed for line-art detection + ink extraction.
+  const imageData = scaleToCanvas(source, settings.maxDim, false)
+  const analysis = analyzeLineArt(imageData)
+  knockOutNearWhite(imageData)
   const { width, height } = imageData
-  const palette = extractPalette(imageData, settings.colorCount)
-  let labels = quantizeImage(imageData, palette)
-  // Extra denoise so enamel fills don't inherit photo/AI grit as speck regions
-  labels = denoiseLabels(labels, width, height, 4)
+
+  if (analysis.isLineArt) {
+    // Map ink → palette index 0 (black), paper → transparent.
+    // Do NOT boundary-trace strokes (that yields hollow double lines).
+    const ink = extractInkMask(imageData, 60)
+    const labels = new Uint16Array(width * height)
+    for (let i = 0; i < width * height; i++) {
+      labels[i] = ink.mask[i] ? 0 : 0xffff
+    }
+    const palette: Rgb[] = [{ r: 20, g: 18, b: 16 }]
+    // Keep tiny stroke fragments (hair, lace); color-art minRegionRatio is too aggressive.
+    const minArea = Math.max(4, Math.round(width * height * 0.00002))
+    const mergeMap = buildMergeMap(1, merges)
+    return assemble(
+      labels,
+      palette,
+      width,
+      height,
+      0, // never Chaikin line-art — corner blobs / self-intersecting fills
+      false, // keep pure black ink — don't snap line art to random PMS
+      overrides,
+      {
+        widthPx: width,
+        heightPx: height,
+        labels,
+        palette,
+        mergeMap,
+      },
+      minArea,
+    )
+  }
+
+  const colorData = scaleToCanvas(source, settings.maxDim, true)
+  knockOutNearWhite(colorData)
+  const cw = colorData.width
+  const ch = colorData.height
+  const palette = extractPalette(colorData, settings.colorCount)
+  let labels = quantizeImage(colorData, palette)
+  labels = denoiseLabels(labels, cw, ch, 4)
 
   const minArea = Math.max(
     24,
-    Math.round(width * height * settings.minRegionRatio),
+    Math.round(cw * ch * settings.minRegionRatio),
   )
-  labels = mergeSmallRegions(labels, width, height, minArea)
-  labels = denoiseLabels(labels, width, height, 1)
+  labels = mergeSmallRegions(labels, cw, ch, minArea)
+  labels = denoiseLabels(labels, cw, ch, 1)
 
   const mergeMap = buildMergeMap(palette.length, merges)
   const mergedLabels = applyMergeMap(labels, mergeMap)
@@ -337,14 +395,14 @@ export async function vectorizeColors(
   return assemble(
     mergedLabels,
     mergedPalette,
-    width,
-    height,
+    cw,
+    ch,
     settings.smoothness,
     settings.snapToPms,
     overrides,
     {
-      widthPx: width,
-      heightPx: height,
+      widthPx: cw,
+      heightPx: ch,
       labels,
       palette,
       mergeMap,
