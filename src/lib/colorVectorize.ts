@@ -404,7 +404,7 @@ export async function vectorizeColors(
   const cw = colorData.width
   const ch = colorData.height
   // Higher fidelity for enamel cel art: keep thin black die-lines & highlights.
-  const colorCount = Math.max(settings.colorCount, 14)
+  const colorCount = Math.max(2, Math.min(32, settings.colorCount))
   const palette = extractPalette(colorData, colorCount, 1)
   ensureBlackSlot(palette, colorData)
   mergeNearDuplicateColors(palette, 28)
@@ -412,8 +412,8 @@ export async function vectorizeColors(
   labels = denoiseLabels(labels, cw, ch, 2)
 
   const minArea = Math.max(
-    14,
-    Math.round(cw * ch * Math.min(settings.minRegionRatio, 0.0001)),
+    8,
+    Math.round(cw * ch * Math.max(0.00005, settings.minRegionRatio)),
   )
   labels = mergeSmallRegions(labels, cw, ch, minArea)
   labels = denoiseLabels(labels, cw, ch, 1)
@@ -427,7 +427,7 @@ export async function vectorizeColors(
     mergedPalette,
     cw,
     ch,
-    Math.max(2, settings.smoothness),
+    Math.max(0, settings.smoothness),
     settings.snapToPms,
     overrides,
     {
