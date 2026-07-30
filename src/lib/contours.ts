@@ -213,10 +213,128 @@ export function pathToSvgD(points: Point[], closed = true): string {
   return d
 }
 
+/** Drop consecutive duplicates and collapse pure collinear runs. */
+export function collapseCollinear(points: Point[], closed = true): Point[] {
+  if (points.length < 3) return points
+  const pts: Point[] = []
+  for (const p of points) {
+    const prev = pts[pts.length - 1]
+    if (prev && prev.x === p.x && prev.y === p.y) continue
+    pts.push(p)
+  }
+  if (pts.length < 3) return pts
+
+  const out: Point[] = []
+  const n = pts.length
+  const at = (i: number) => pts[((i % n) + n) % n]
+  for (let i = 0; i < n; i++) {
+    if (!closed && (i === 0 || i === n - 1)) {
+      out.push(pts[i])
+      continue
+    }
+    const a = at(i - 1)
+    const b = at(i)
+    const c = at(i + 1)
+    const cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+    const dot = (b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y)
+    // Keep corners and direction changes; drop near-collinear midpoints.
+    if (Math.abs(cross) > 0.35 || dot < 0) out.push(b)
+  }
+  return out.length >= 3 ? out : pts
+}
+
+function turnAngle(a: Point, b: Point, c: Point): number {
+  const abx = b.x - a.x
+  const aby = b.y - a.y
+  const bcx = c.x - b.x
+  const bcy = c.y - b.y
+  const lab = Math.hypot(abx, aby) || 1
+  const lbc = Math.hypot(bcx, bcy) || 1
+  const dot = (abx * bcx + aby * bcy) / (lab * lbc)
+  return Math.acos(Math.max(-1, Math.min(1, dot)))
+}
+
+/**
+ * Corner-preserving cubic Bézier fit — real curve commands, not pixel stairs.
+ * Sharp corners stay as line joins; smooth spans become C segments.
+ */
+export function pathToSmoothSvgD(
+  points: Point[],
+  closed = true,
+  cornerAngleDeg = 55,
+): string {
+  if (points.length === 0) return ''
+  let pts = collapseCollinear(points, closed)
+  if (pts.length < 3) return pathToSvgD(pts, closed)
+
+  const n = pts.length
+  const cornerThresh = (cornerAngleDeg * Math.PI) / 180
+  const isCorner = new Array<boolean>(n).fill(false)
+  for (let i = 0; i < n; i++) {
+    if (!closed && (i === 0 || i === n - 1)) {
+      isCorner[i] = true
+      continue
+    }
+    const a = pts[(i - 1 + n) % n]
+    const b = pts[i]
+    const c = pts[(i + 1) % n]
+    isCorner[i] = turnAngle(a, b, c) > cornerThresh
+  }
+
+  if (!isCorner.some(Boolean)) {
+    for (let i = 0; i < n; i += Math.max(1, Math.floor(n / 6))) isCorner[i] = true
+    isCorner[0] = true
+  }
+
+  const anchors: number[] = []
+  for (let i = 0; i < n; i++) if (isCorner[i]) anchors.push(i)
+  if (anchors.length === 0) return pathToSvgD(pts, closed)
+
+  // Unit tangent at point index, averaged from neighbors.
+  const tangentAt = (idx: number): Point => {
+    const a = pts[(idx - 1 + n) % n]
+    const c = pts[(idx + 1) % n]
+    const tx = c.x - a.x
+    const ty = c.y - a.y
+    const len = Math.hypot(tx, ty) || 1
+    return { x: tx / len, y: ty / len }
+  }
+
+  let d = `M ${fmt(pts[anchors[0]].x)} ${fmt(pts[anchors[0]].y)}`
+  const segCount = closed ? anchors.length : anchors.length - 1
+
+  for (let s = 0; s < segCount; s++) {
+    const i0 = anchors[s]
+    const i1 = anchors[(s + 1) % anchors.length]
+    // Count span length
+    let spanLen = 0
+    for (let i = i0; i !== i1; i = (i + 1) % n) spanLen++
+    const p0 = pts[i0]
+    const p3 = pts[i1]
+
+    if (spanLen <= 1) {
+      d += ` L ${fmt(p3.x)} ${fmt(p3.y)}`
+      continue
+    }
+
+    const chord = Math.hypot(p3.x - p0.x, p3.y - p0.y) || 1
+    const handle = Math.min(chord * 0.22, spanLen * 0.35)
+    const t0 = tangentAt(i0)
+    const t1 = tangentAt(i1)
+    // Outgoing tangent at start, incoming at end — short handles avoid fill overshoot
+    const c1 = { x: p0.x + t0.x * handle, y: p0.y + t0.y * handle }
+    const c2 = { x: p3.x - t1.x * handle, y: p3.y - t1.y * handle }
+    d += ` C ${fmt(c1.x)} ${fmt(c1.y)} ${fmt(c2.x)} ${fmt(c2.y)} ${fmt(p3.x)} ${fmt(p3.y)}`
+  }
+
+  if (closed) d += ' Z'
+  return d
+}
+
 /** Join outer + hole rings into one evenodd path `d`. */
-export function ringsToSvgD(rings: Point[][]): string {
+export function ringsToSvgD(rings: Point[][], smooth = false): string {
   return rings
-    .map((ring) => pathToSvgD(ring, true))
+    .map((ring) => (smooth ? pathToSmoothSvgD(ring, true) : pathToSvgD(ring, true)))
     .filter(Boolean)
     .join(' ')
 }

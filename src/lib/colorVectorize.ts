@@ -1,4 +1,4 @@
-import { extractColorContours, ringsToSvgD, simplifyPath, smoothPath } from './contours'
+import { collapseCollinear, extractColorContours, ringsToSvgD, simplifyPath } from './contours'
 import type { Point } from './contours'
 import { analyzeLineArt, extractInkMask } from './lineArt'
 import { findPmsByCode, nearestPms, snapPaletteToPms } from './pms'
@@ -18,10 +18,10 @@ export type ColorVectorSettings = {
 }
 
 export const DEFAULT_COLOR_VECTOR_SETTINGS: ColorVectorSettings = {
-  colorCount: 8,
-  minRegionRatio: 0.0004,
-  smoothness: 2,
-  maxDim: 900,
+  colorCount: 14,
+  minRegionRatio: 0.00012,
+  smoothness: 3,
+  maxDim: 1200,
   snapToPms: true,
 }
 
@@ -78,14 +78,39 @@ function knockOutNearWhite(imageData: ImageData) {
   }
 }
 
+/** Drop solid black backdrops (common on finished pin mockups). */
+function knockOutNearBlackBackdrop(imageData: ImageData) {
+  const { data, width, height } = imageData
+  const corners = [
+    0,
+    (width - 1) * 4,
+    (height - 1) * width * 4,
+    ((height - 1) * width + width - 1) * 4,
+  ]
+  let blackCorners = 0
+  for (const o of corners) {
+    if (data[o + 3] < 16) continue
+    if (data[o] < 18 && data[o + 1] < 18 && data[o + 2] < 18) blackCorners++
+  }
+  if (blackCorners < 2) return
+
+  for (let i = 0; i < width * height; i++) {
+    const o = i * 4
+    if (data[o + 3] < 16) continue
+    if (data[o] < 14 && data[o + 1] < 14 && data[o + 2] < 14) {
+      data[o + 3] = 0
+    }
+  }
+}
+
 function processContour(points: Point[], smoothness: number): Point[] {
-  // smoothness 0 → orthogonal pixel edges only (no RDP) so thin ink ribbons
-  // stay solid instead of collapsing into hollow / self-intersecting paths.
-  if (smoothness <= 0) return points
-  const epsilon = 0.55 + (5 - Math.min(5, smoothness)) * 0.12
+  // Flatten pixel stairs, keep sharp enamel corners. Bézier conversion happens
+  // at SVG emit time — Chaikin is avoided (it blobs star points / box corners).
+  if (smoothness <= 0) return collapseCollinear(points, true)
+  // Low epsilon keeps star points / trunk ridges; curves soften the stairs.
+  const epsilon = 0.55 + (5 - Math.min(5, smoothness)) * 0.1
   let pts = simplifyPath(points, epsilon)
-  pts = smoothPath(pts, smoothness)
-  pts = simplifyPath(pts, Math.max(0.25, epsilon * 0.5))
+  pts = collapseCollinear(pts, true)
   return pts
 }
 
@@ -257,7 +282,7 @@ function stateToSvg(
         .map((ring) => processContour(ring, smoothness))
         .filter((ring) => ring.length >= 3)
       if (!processed.length) continue
-      const d = ringsToSvgD(processed)
+      const d = ringsToSvgD(processed, smoothness > 0)
       if (!d) continue
       parts.push(
         `<path fill="${fill}" fill-rule="evenodd" stroke="none"${pmsAttr} d="${d}" />`,
@@ -345,7 +370,7 @@ export async function vectorizeColors(
   if (analysis.isLineArt) {
     // Map ink → palette index 0 (black), paper → transparent.
     // Do NOT boundary-trace strokes (that yields hollow double lines).
-    const ink = extractInkMask(imageData, 60)
+    const ink = extractInkMask(imageData, 70, 'none')
     const labels = new Uint16Array(width * height)
     for (let i = 0; i < width * height; i++) {
       labels[i] = ink.mask[i] ? 0 : 0xffff
@@ -359,7 +384,7 @@ export async function vectorizeColors(
       palette,
       width,
       height,
-      0, // never Chaikin line-art — corner blobs / self-intersecting fills
+      2, // cubic Bézier ink paths (no Chaikin) — no-pixel SVG
       false, // keep pure black ink — don't snap line art to random PMS
       overrides,
       {
@@ -373,17 +398,22 @@ export async function vectorizeColors(
     )
   }
 
-  const colorData = scaleToCanvas(source, settings.maxDim, true)
+  const colorData = scaleToCanvas(source, settings.maxDim, false)
   knockOutNearWhite(colorData)
+  knockOutNearBlackBackdrop(colorData)
   const cw = colorData.width
   const ch = colorData.height
-  const palette = extractPalette(colorData, settings.colorCount)
+  // Higher fidelity for enamel cel art: keep thin black die-lines & highlights.
+  const colorCount = Math.max(settings.colorCount, 14)
+  const palette = extractPalette(colorData, colorCount, 1)
+  ensureBlackSlot(palette, colorData)
+  mergeNearDuplicateColors(palette, 28)
   let labels = quantizeImage(colorData, palette)
-  labels = denoiseLabels(labels, cw, ch, 4)
+  labels = denoiseLabels(labels, cw, ch, 2)
 
   const minArea = Math.max(
-    24,
-    Math.round(cw * ch * settings.minRegionRatio),
+    14,
+    Math.round(cw * ch * Math.min(settings.minRegionRatio, 0.0001)),
   )
   labels = mergeSmallRegions(labels, cw, ch, minArea)
   labels = denoiseLabels(labels, cw, ch, 1)
@@ -397,7 +427,7 @@ export async function vectorizeColors(
     mergedPalette,
     cw,
     ch,
-    settings.smoothness,
+    Math.max(2, settings.smoothness),
     settings.snapToPms,
     overrides,
     {
@@ -409,6 +439,38 @@ export async function vectorizeColors(
     },
     minArea,
   )
+}
+
+function ensureBlackSlot(palette: Rgb[], imageData: ImageData) {
+  const { data } = imageData
+  let blackPx = 0
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 128) continue
+    if (data[i] < 40 && data[i + 1] < 40 && data[i + 2] < 40) blackPx++
+  }
+  if (blackPx < 64) return
+  let darkest = 0
+  let darkestY = Infinity
+  for (let i = 0; i < palette.length; i++) {
+    const y = 0.299 * palette[i].r + 0.587 * palette[i].g + 0.114 * palette[i].b
+    if (y < darkestY) {
+      darkestY = y
+      darkest = i
+    }
+  }
+  palette[darkest] = { r: 12, g: 10, b: 10 }
+}
+
+/** Collapse near-identical enamel flats (kills hat grain / soft-shade speckles). */
+function mergeNearDuplicateColors(palette: Rgb[], maxDist: number) {
+  for (let i = 0; i < palette.length; i++) {
+    for (let j = i + 1; j < palette.length; j++) {
+      if (colorDistance(palette[i], palette[j]) <= maxDist) {
+        // Pull j toward i (keep earlier / typically larger median-cut bucket)
+        palette[j] = { ...palette[i] }
+      }
+    }
+  }
 }
 
 /**

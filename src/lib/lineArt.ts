@@ -82,10 +82,15 @@ export function analyzeLineArt(imageData: ImageData): {
 /**
  * Build a clean binary ink mask from a (likely) line-art image.
  * `sensitivity` 0–100: lower → only darker ink; higher → keep lighter gray strokes.
+ * `cleanup`:
+ *  - none  — threshold only (best for dense hatching self-tests)
+ *  - light — drop freckles only
+ *  - full  — close 1px gaps then freckle-clean (default for noisy scans)
  */
 export function extractInkMask(
   imageData: ImageData,
   sensitivity = 50,
+  cleanup: 'none' | 'light' | 'full' = 'full',
 ): InkMask {
   const { data, width, height } = imageData
   const analysis = analyzeLineArt(imageData)
@@ -100,15 +105,19 @@ export function extractInkMask(
     if (y <= threshold) mask[i] = 255
   }
 
-  // Close 1px gaps in strokes, then drop only true freckles (keep hair/lace).
-  mask = dilate(mask, width, height, 1)
-  mask = erode(mask, width, height, 1)
-  mask = removeSmallComponents(
-    mask,
-    width,
-    height,
-    Math.max(3, Math.round((width * height) / 200000)),
-  )
+  if (cleanup === 'full') {
+    // Close 1px gaps in strokes, then drop only true freckles (keep hair/lace).
+    mask = dilate(mask, width, height, 1)
+    mask = erode(mask, width, height, 1)
+  }
+  if (cleanup !== 'none') {
+    mask = removeSmallComponents(
+      mask,
+      width,
+      height,
+      Math.max(3, Math.round((width * height) / 200000)),
+    )
+  }
 
   return {
     mask,
