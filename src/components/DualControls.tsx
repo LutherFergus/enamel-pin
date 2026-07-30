@@ -34,7 +34,7 @@ export function DualControls({ settings, onChange, disabled }: Props) {
       </div>
       <p className="hint">
         Line art keeps the ink itself (no double outlines). Color art strokes flat-fill
-        boundaries. Lower Detail = cleaner / fewer lines.
+        boundaries. Lower Detail = cleaner / fewer lines. Changes update the preview live.
       </p>
       <div className="field">
         <label>

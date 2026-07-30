@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useTransition } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { AiGenerate } from './components/AiGenerate'
 import { DualControls } from './components/DualControls'
 import { Dropzone } from './components/Dropzone'
@@ -35,6 +35,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState<PreviewTab>('vector')
   const [isPending, startTransition] = useTransition()
   const [busy, setBusy] = useState(false)
+  const pipelineGen = useRef(0)
 
   useEffect(() => {
     return () => {
@@ -85,6 +86,7 @@ export default function App() {
       nextMerges: Array<[number, number]>,
       nextOverrides: PmsOverrides,
     ) => {
+      const gen = ++pipelineGen.current
       setBusy(true)
       setError(null)
       try {
@@ -95,6 +97,10 @@ export default function App() {
           nextMerges,
           nextOverrides,
         )
+        if (gen !== pipelineGen.current) {
+          revokeDualUrls(next)
+          return
+        }
         startTransition(() => {
           setResult((prev) => {
             revokeDualUrls(prev)
@@ -103,9 +109,10 @@ export default function App() {
           setViewMode('vector')
         })
       } catch (err) {
+        if (gen !== pipelineGen.current) return
         setError(err instanceof Error ? err.message : 'Processing failed')
       } finally {
-        setBusy(false)
+        if (gen === pipelineGen.current) setBusy(false)
       }
     },
     [],
@@ -130,12 +137,12 @@ export default function App() {
         const url = URL.createObjectURL(file)
         setSource(img, url, file.name.replace(/\.[^.]+$/, '') || 'artwork')
         setSourceMode('upload')
-        await runPipeline(img, settings, [], {})
+        // Preview updates via the debounced settings/source effect below.
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Could not load image')
       }
     },
-    [runPipeline, setSource, settings],
+    [setSource],
   )
 
   const onGenerate = useCallback(
@@ -146,14 +153,26 @@ export default function App() {
         const gen = await generateAiImage({ prompt, themes })
         setSource(gen.image, gen.objectUrl, slugify(prompt))
         setSourceMode('ai')
-        await runPipeline(gen.image, settings, [], {})
+        // Preview updates via the debounced settings/source effect below.
       } catch (err) {
-        setBusy(false)
         setError(err instanceof Error ? err.message : 'Generation failed')
+      } finally {
+        setBusy(false)
       }
     },
-    [runPipeline, setSource, settings],
+    [setSource],
   )
+
+  // Live-update the viewer whenever source or side-menu settings change.
+  useEffect(() => {
+    if (!sourceImage) return
+    const handle = window.setTimeout(() => {
+      setMerges([])
+      setPmsOverrides({})
+      void runPipeline(sourceImage, settings, [], {})
+    }, 220)
+    return () => window.clearTimeout(handle)
+  }, [sourceImage, settings, runPipeline])
 
   const onApply = useCallback(() => {
     if (!sourceImage) return
@@ -241,7 +260,7 @@ export default function App() {
           <DualControls
             settings={settings}
             onChange={setSettings}
-            disabled={busy}
+            disabled={false}
           />
 
           <button
