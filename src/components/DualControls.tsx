@@ -103,6 +103,10 @@ export function DualControls({ settings, onChange, disabled }: Props) {
           onChange={(e) => patchVector({ smoothness: Number(e.target.value) })}
         />
       </div>
+      <p className="hint">
+        Higher = smoother Vectorizer-style curves (less pixel stair-step). Lower = tighter to
+        the quantized edge.
+      </p>
       <div className="field">
         <label>
           <span>Detail cleanup</span>

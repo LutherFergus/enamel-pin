@@ -1,9 +1,8 @@
 import { knockOutSolidBackground } from './background'
-import { extractColorContours, pathToSvgD, simplifyPath, smoothPath } from './contours'
-import type { Point } from './contours'
 import { findPmsByCode, nearestPms, snapPaletteToPms } from './pms'
 import { countLabelUsage, denoiseLabels, extractPalette, quantizeImage } from './quantize'
 import { labelRegions, mergeSmallRegions } from './regions'
+import { labelsToSmoothSvg } from './traceSvg'
 import type { PaletteColor, Rgb } from './types'
 import { colorDistance, rgbToHex } from './types'
 
@@ -20,7 +19,7 @@ export type ColorVectorSettings = {
 export const DEFAULT_COLOR_VECTOR_SETTINGS: ColorVectorSettings = {
   colorCount: 12,
   minRegionRatio: 0.00025,
-  smoothness: 1.5,
+  smoothness: 3,
   maxDim: 1100,
   snapToPms: true,
 }
@@ -63,20 +62,6 @@ function scaleToCanvas(
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!
   ctx.drawImage(source, 0, 0, w, h)
   return ctx.getImageData(0, 0, w, h)
-}
-
-function processContour(points: Point[], smoothness: number): Point[] {
-  // Scanline rect rings stay crisp — smoothing turns enamel fills into mush.
-  if (points.length <= 4) return points
-  const epsilon = 0.35 + (5 - Math.min(5, smoothness)) * 0.06
-  let pts = simplifyPath(points, epsilon)
-  if (pts.length < 4) return points
-  if (smoothness > 0) {
-    pts = smoothPath(pts, smoothness)
-    pts = simplifyPath(pts, Math.max(0.2, epsilon * 0.45))
-  }
-  if (pts.length < 4) return points
-  return pts
 }
 
 function applyMergeMap(labels: Uint16Array, mergeMap: number[]): Uint16Array {
@@ -223,38 +208,13 @@ function stateToSvg(
   heightPx: number,
   smoothness: number,
 ): { svg: string; regionCount: number } {
-  const contoursByColor = extractColorContours(labels, widthPx, heightPx)
   const { regions } = labelRegions(labels, widthPx, heightPx)
-
-  const legend = [...metaByIndex.values()]
-    .map(
-      (c) =>
-        `  ${c.pmsName ?? c.hex} → ${c.hex}${
-          c.pmsDeltaE != null ? ` (ΔE ${c.pmsDeltaE})` : ''
-        }`,
-    )
-    .join('\n')
-
-  const parts: string[] = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${widthPx} ${heightPx}" width="${widthPx}" height="${heightPx}">`,
-    `<!-- PMS Solid Coated palette\n${legend}\n-->`,
-    '<g id="fills">',
-  ]
-
-  for (const [colorIndex, contours] of contoursByColor) {
-    const fill = rgbToHex(fillRgb[colorIndex])
-    const meta = metaByIndex.get(colorIndex)
-    const pmsAttr = meta?.pmsCode ? ` data-pms="${meta.pmsCode}"` : ''
-    for (const contour of contours) {
-      const pts = processContour(contour, smoothness)
-      const d = pathToSvgD(pts)
-      if (!d) continue
-      parts.push(`<path fill="${fill}" stroke="none"${pmsAttr} d="${d}" />`)
-    }
-  }
-  parts.push('</g></svg>')
-
-  return { svg: parts.join('\n'), regionCount: regions.length }
+  const { svg, pathCount } = labelsToSmoothSvg(labels, fillRgb, metaByIndex, {
+    smoothness,
+    widthPx,
+    heightPx,
+  })
+  return { svg, regionCount: Math.max(regions.length, pathCount) }
 }
 
 async function packResult(
