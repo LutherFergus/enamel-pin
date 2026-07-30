@@ -31,12 +31,26 @@ export function analyzeLineArt(imageData: ImageData): {
   let mid = 0
   let light = 0
   let opaque = 0
+  let lowChroma = 0
 
   for (let i = 0; i < width * height; i++) {
     const o = i * 4
-    if (data[o + 3] < 16) continue
+    // Knocked-out / transparent backdrop still counts as paper — otherwise
+    // lightRatio collapses after knockOut* and we mis-route to color boundaries
+    // (which double-traces every stroke into hollow jagged lines).
+    if (data[o + 3] < 16) {
+      light++
+      opaque++
+      lowChroma++
+      continue
+    }
     opaque++
-    const y = luma(data[o], data[o + 1], data[o + 2])
+    const r = data[o]
+    const g = data[o + 1]
+    const b = data[o + 2]
+    const chroma = Math.max(r, g, b) - Math.min(r, g, b)
+    if (chroma < 28) lowChroma++
+    const y = luma(r, g, b)
     // Near-white paper / near-black ink (ignore slight anti-alias as mid)
     if (y < 90) dark++
     else if (y > 210) light++
@@ -50,13 +64,17 @@ export function analyzeLineArt(imageData: ImageData): {
   const darkRatio = dark / opaque
   const midRatio = mid / opaque
   const lightRatio = light / opaque
+  const lowChromaRatio = lowChroma / opaque
 
-  // Classic ink drawing: paper + ink dominate, little continuous tone
+  // Classic ink drawing: near-grayscale paper + ink, little continuous tone.
+  // Must reject flat-color enamel art (high chroma) even when it has light bg.
+  // darkRatio can be tiny on sparse line art (thin strokes on large canvas).
   const isLineArt =
-    midRatio < 0.22 &&
-    darkRatio > 0.02 &&
+    lowChromaRatio > 0.88 &&
+    midRatio < 0.25 &&
+    darkRatio > 0.008 &&
     lightRatio > 0.35 &&
-    darkRatio + lightRatio > 0.78
+    darkRatio + lightRatio > 0.75
 
   return { isLineArt, darkRatio, midRatio, lightRatio }
 }
@@ -82,11 +100,15 @@ export function extractInkMask(
     if (y <= threshold) mask[i] = 255
   }
 
-  // Drop freckles, close tiny gaps in strokes
-  mask = removeSmallComponents(mask, width, height, Math.max(6, Math.round((width * height) / 80000)))
+  // Close 1px gaps in strokes, then drop only true freckles (keep hair/lace).
   mask = dilate(mask, width, height, 1)
   mask = erode(mask, width, height, 1)
-  mask = removeSmallComponents(mask, width, height, Math.max(4, Math.round((width * height) / 100000)))
+  mask = removeSmallComponents(
+    mask,
+    width,
+    height,
+    Math.max(3, Math.round((width * height) / 200000)),
+  )
 
   return {
     mask,

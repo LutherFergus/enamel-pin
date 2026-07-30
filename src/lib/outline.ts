@@ -129,10 +129,11 @@ export async function extractOutlinePng(
   // Probe at working size with smoothing off first for line-art detection
   const probe = drawScaled(source, settings.maxDim, false)
   const probeData = probe.ctx.getImageData(0, 0, probe.w, probe.h)
+  // Detect BEFORE knocking out paper (transparent-as-light also covers post-knockout).
+  const analysis = analyzeLineArt(probeData)
   knockOutLightBackground(probeData)
   probe.ctx.putImageData(probeData, 0, 0)
 
-  const analysis = analyzeLineArt(probeData)
   if (analysis.isLineArt) {
     const ink = extractInkMask(probeData, settings.sensitivity)
     const mask = inkPreserved(ink.mask, ink.width, ink.height, settings.thickness)

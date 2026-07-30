@@ -79,14 +79,13 @@ function knockOutNearWhite(imageData: ImageData) {
 }
 
 function processContour(points: Point[], smoothness: number): Point[] {
-  // smoothness 0 → light simplify only (line-art ink stays crisp)
-  const epsilon =
-    smoothness <= 0 ? 0.35 : 0.55 + (5 - Math.min(5, smoothness)) * 0.12
+  // smoothness 0 → orthogonal pixel edges only (no RDP) so thin ink ribbons
+  // stay solid instead of collapsing into hollow / self-intersecting paths.
+  if (smoothness <= 0) return points
+  const epsilon = 0.55 + (5 - Math.min(5, smoothness)) * 0.12
   let pts = simplifyPath(points, epsilon)
-  if (smoothness > 0) {
-    pts = smoothPath(pts, smoothness)
-    pts = simplifyPath(pts, Math.max(0.25, epsilon * 0.5))
-  }
+  pts = smoothPath(pts, smoothness)
+  pts = simplifyPath(pts, Math.max(0.25, epsilon * 0.5))
   return pts
 }
 
@@ -337,27 +336,30 @@ export async function vectorizeColors(
   merges: Array<[number, number]> = [],
   overrides: PmsOverrides = {},
 ): Promise<ColorVectorResult> {
+  // Crisp nearest-neighbor first — needed for line-art detection + ink extraction.
   const imageData = scaleToCanvas(source, settings.maxDim, false)
+  const analysis = analyzeLineArt(imageData)
   knockOutNearWhite(imageData)
   const { width, height } = imageData
 
-  const analysis = analyzeLineArt(imageData)
   if (analysis.isLineArt) {
-    // Map ink → palette index 0 (black), paper → transparent
-    const ink = extractInkMask(imageData, 55)
+    // Map ink → palette index 0 (black), paper → transparent.
+    // Do NOT boundary-trace strokes (that yields hollow double lines).
+    const ink = extractInkMask(imageData, 60)
     const labels = new Uint16Array(width * height)
     for (let i = 0; i < width * height; i++) {
       labels[i] = ink.mask[i] ? 0 : 0xffff
     }
     const palette: Rgb[] = [{ r: 20, g: 18, b: 16 }]
-    const minArea = Math.max(12, Math.round(width * height * settings.minRegionRatio))
+    // Keep tiny stroke fragments (hair, lace); color-art minRegionRatio is too aggressive.
+    const minArea = Math.max(4, Math.round(width * height * 0.00002))
     const mergeMap = buildMergeMap(1, merges)
     return assemble(
       labels,
       palette,
       width,
       height,
-      Math.min(0, settings.smoothness), // keep crisp ink paths — no Chaikin blobs on corners
+      0, // never Chaikin line-art — corner blobs / self-intersecting fills
       false, // keep pure black ink — don't snap line art to random PMS
       overrides,
       {
