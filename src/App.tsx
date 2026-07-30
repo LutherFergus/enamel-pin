@@ -211,7 +211,7 @@ export default function App() {
       </header>
 
       <div className="layout">
-        <aside className="panel">
+        <aside className="panel controls-panel">
           <div className="tabs source-tabs" role="tablist" aria-label="Source">
             <button
               type="button"
