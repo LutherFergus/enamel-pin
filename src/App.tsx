@@ -17,12 +17,38 @@ import {
   type DualOutputSettings,
 } from './lib/pipeline'
 import { getPmsChartSize } from './lib/pms'
+import {
+  forgetRememberedSettings,
+  initialSettings,
+  loadRememberedSettings,
+  rememberSettings,
+} from './lib/rememberSettings'
 import { loadImageFromFile } from './lib/vectorize'
 
 type SourceMode = 'upload' | 'ai'
 
+function formatSavedAt(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    })
+  } catch {
+    return ''
+  }
+}
+
 export default function App() {
-  const [settings, setSettings] = useState<DualOutputSettings>(DEFAULT_DUAL_SETTINGS)
+  const rememberedBoot = loadRememberedSettings()
+  const [settings, setSettings] = useState<DualOutputSettings>(
+    () => initialSettings(),
+  )
+  const [remembered, setRemembered] = useState(Boolean(rememberedBoot))
+  const [rememberedLabel, setRememberedLabel] = useState<string | null>(
+    rememberedBoot ? formatSavedAt(rememberedBoot.savedAt) : null,
+  )
   const [sourceMode, setSourceMode] = useState<SourceMode>('upload')
   const [sourceName, setSourceName] = useState('artwork')
   const [sourceUrl, setSourceUrl] = useState<string | null>(null)
@@ -179,6 +205,19 @@ export default function App() {
     [merges, pmsOverrides, refreshVector],
   )
 
+  const onRememberSettings = useCallback(() => {
+    const saved = rememberSettings(settings)
+    setRemembered(true)
+    setRememberedLabel(formatSavedAt(saved.savedAt))
+  }, [settings])
+
+  const onForgetSettings = useCallback(() => {
+    forgetRememberedSettings()
+    setSettings(structuredClone(DEFAULT_DUAL_SETTINGS))
+    setRemembered(false)
+    setRememberedLabel(null)
+  }, [])
+
   const downloadOutline = useCallback(() => {
     if (!result) return
     downloadBlob(result.outline.pngBlob, `${sourceName}-outline.png`)
@@ -247,6 +286,10 @@ export default function App() {
             settings={settings}
             onChange={setSettings}
             disabled={busy}
+            remembered={remembered}
+            rememberedLabel={rememberedLabel}
+            onRemember={onRememberSettings}
+            onForget={onForgetSettings}
           />
 
           <button

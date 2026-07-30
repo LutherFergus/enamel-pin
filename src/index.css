@@ -167,6 +167,35 @@ img {
   line-height: 1.4;
 }
 
+.remember-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.35rem;
+}
+
+.remember-heading {
+  margin: 0;
+}
+
+.remember-actions {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.remember-btn {
+  padding: 0.45rem 0.85rem;
+  font-size: 0.78rem;
+}
+
+.remember-status.saved {
+  color: var(--ink, #1d2a22);
+  font-weight: 600;
+}
+
 .actions {
   display: grid;
   gap: 0.6rem;
