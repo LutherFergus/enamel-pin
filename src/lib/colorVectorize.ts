@@ -103,16 +103,130 @@ function knockOutNearBlackBackdrop(imageData: ImageData) {
   }
 }
 
-function processContour(points: Point[], smoothness: number): Point[] {
+function processContour(points: Point[], smoothness: number, scale = 1): Point[] {
   // Flatten pixel stairs, keep sharp enamel corners. Bézier conversion happens
   // at SVG emit time — Chaikin is avoided (it blobs star points / box corners).
-  if (smoothness <= 0) return collapseCollinear(destairPath(points, true), true)
   let pts = destairPath(points, true)
+  if (smoothness <= 0) {
+    pts = collapseCollinear(pts, true)
+    return scale === 1 ? pts : pts.map((p) => ({ x: p.x / scale, y: p.y / scale }))
+  }
   // Higher smoothness → longer curve spans (less lattice wiggle).
-  const epsilon = 0.7 + Math.min(5, smoothness) * 0.28
+  const epsilon = (0.9 + Math.min(5, smoothness) * 0.35) * Math.max(1, scale * 0.55)
   pts = simplifyPath(pts, epsilon)
   pts = collapseCollinear(pts, true)
+  if (scale !== 1) pts = pts.map((p) => ({ x: p.x / scale, y: p.y / scale }))
   return pts
+}
+
+/**
+ * Contour each color via binary bilinear upsample + soften so cubic paths
+ * get sub-pixel edges (nearest-neighbor label upsampling does NOT remove stairs).
+ */
+function extractSmoothColorContours(
+  labels: Uint16Array,
+  width: number,
+  height: number,
+  minArea: number,
+  smoothness: number,
+): Map<number, Point[][][]> {
+  const factor = smoothness > 0 ? 2 : 1
+  const colors = new Set<number>()
+  for (let i = 0; i < labels.length; i++) {
+    if (labels[i] !== 0xffff) colors.add(labels[i])
+  }
+
+  const out = new Map<number, Point[][][]>()
+  for (const color of colors) {
+    const mask = new Uint8Array(width * height)
+    let count = 0
+    for (let i = 0; i < labels.length; i++) {
+      if (labels[i] === color) {
+        mask[i] = 255
+        count++
+      }
+    }
+    if (count < minArea) continue
+
+    let workMask = mask
+    let ww = width
+    let wh = height
+    if (factor > 1) {
+      const nw = width * factor
+      const nh = height * factor
+      const up = new Uint8Array(nw * nh)
+      for (let y = 0; y < nh; y++) {
+        for (let x = 0; x < nw; x++) {
+          const fx = x / factor
+          const fy = y / factor
+          const x0 = Math.min(width - 1, Math.floor(fx))
+          const y0 = Math.min(height - 1, Math.floor(fy))
+          const x1 = Math.min(width - 1, x0 + 1)
+          const y1 = Math.min(height - 1, y0 + 1)
+          const tx = fx - x0
+          const ty = fy - y0
+          const v00 = mask[y0 * width + x0] ? 1 : 0
+          const v10 = mask[y0 * width + x1] ? 1 : 0
+          const v01 = mask[y1 * width + x0] ? 1 : 0
+          const v11 = mask[y1 * width + x1] ? 1 : 0
+          const v =
+            v00 * (1 - tx) * (1 - ty) +
+            v10 * tx * (1 - ty) +
+            v01 * (1 - tx) * ty +
+            v11 * tx * ty
+          up[y * nw + x] = v >= 0.5 ? 255 : 0
+        }
+      }
+      // Soften stairs at high res
+      let cur = up
+      for (let pass = 0; pass < 2; pass++) {
+        const acc = new Float32Array(nw * nh)
+        for (let y = 0; y < nh; y++) {
+          for (let x = 0; x < nw; x++) {
+            let sum = 0
+            let wt = 0
+            for (let dy = -1; dy <= 1; dy++) {
+              for (let dx = -1; dx <= 1; dx++) {
+                const nx = x + dx
+                const ny = y + dy
+                if (nx < 0 || ny < 0 || nx >= nw || ny >= nh) continue
+                const wgt = dx === 0 && dy === 0 ? 4 : dx === 0 || dy === 0 ? 2 : 1
+                sum += (cur[ny * nw + nx] ? 1 : 0) * wgt
+                wt += wgt
+              }
+            }
+            acc[y * nw + x] = sum / wt
+          }
+        }
+        const next = new Uint8Array(nw * nh)
+        for (let i = 0; i < nw * nh; i++) next[i] = acc[i] >= 0.45 ? 255 : 0
+        cur = next
+      }
+      workMask = cur
+      ww = nw
+      wh = nh
+    }
+
+    const lab = new Uint16Array(ww * wh)
+    for (let i = 0; i < ww * wh; i++) lab[i] = workMask[i] ? 0 : 0xffff
+    const raw = extractColorContours(
+      lab,
+      ww,
+      wh,
+      Math.max(4, minArea * factor * factor),
+    )
+    const components = raw.get(0) ?? []
+    if (!components.length) continue
+    out.set(
+      color,
+      components.map((rings) =>
+        rings
+          .map((ring) => processContour(ring, smoothness, factor))
+          .filter((ring) => ring.length >= 3),
+      ),
+    )
+  }
+  return out
 }
 
 function applyMergeMap(labels: Uint16Array, mergeMap: number[]): Uint16Array {
@@ -255,7 +369,13 @@ function stateToSvg(
   smoothness: number,
   minArea: number,
 ): { svg: string; regionCount: number } {
-  const contoursByColor = extractColorContours(labels, widthPx, heightPx, minArea)
+  const contoursByColor = extractSmoothColorContours(
+    labels,
+    widthPx,
+    heightPx,
+    minArea,
+    smoothness,
+  )
   const { regions } = labelRegions(labels, widthPx, heightPx)
 
   const legend = [...metaByIndex.values()]
@@ -279,11 +399,9 @@ function stateToSvg(
     const meta = metaByIndex.get(colorIndex)
     const pmsAttr = meta?.pmsCode ? ` data-pms="${meta.pmsCode}"` : ''
     for (const rings of components) {
-      const processed = rings
-        .map((ring) => processContour(ring, smoothness))
-        .filter((ring) => ring.length >= 3)
+      const processed = rings.filter((ring) => ring.length >= 3)
       if (!processed.length) continue
-      const d = ringsToSvgD(processed, smoothness > 0, 48)
+      const d = ringsToSvgD(processed, smoothness > 0, 55)
       if (!d) continue
       parts.push(
         `<path fill="${fill}" fill-rule="evenodd" stroke="none"${pmsAttr} d="${d}" />`,

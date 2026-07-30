@@ -16,7 +16,7 @@ export function DualControls({ settings, onChange, disabled }: Props) {
 
   return (
     <div>
-      <h2>Stroke outline (PNG)</h2>
+      <h2>Vector outline (SVG)</h2>
       <div className="field">
         <label>
           <span>Detail</span>
@@ -52,7 +52,7 @@ export function DualControls({ settings, onChange, disabled }: Props) {
         />
       </div>
       <p className="hint">
-        Default 2px. Thickens clean strokes only — never adds edge-detection noise.
+        Default 1px. Thickens clean strokes only — never adds edge-detection noise.
       </p>
 
       <h2>Color vector (SVG)</h2>

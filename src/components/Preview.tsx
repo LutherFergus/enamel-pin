@@ -21,17 +21,18 @@ const MIN_SCALE = 1
 const MAX_SCALE = 6
 
 export function Preview({ viewMode, sourceUrl, result, busy }: Props) {
-  const [vectorUrl, setVectorUrl] = useState<string | null>(null)
-  const [outlineUrl, setOutlineUrl] = useState<string | null>(null)
+  const [vectorSvg, setVectorSvg] = useState<string | null>(null)
+  const [outlineSvg, setOutlineSvg] = useState<string | null>(null)
 
   useEffect(() => {
     if (!result) {
-      setVectorUrl(null)
-      setOutlineUrl(null)
+      setVectorSvg(null)
+      setOutlineSvg(null)
       return
     }
-    setVectorUrl(result.vector.svgUrl)
-    setOutlineUrl(result.outline.svgUrl)
+    // Inline SVG markup so CSS zoom scales vectors (not a rasterized <img>).
+    setVectorSvg(result.vector.svg)
+    setOutlineSvg(result.outline.svg)
   }, [result])
 
   if (!sourceUrl && !result) {
@@ -57,22 +58,28 @@ export function Preview({ viewMode, sourceUrl, result, busy }: Props) {
 
   if (viewMode === 'source' && sourceUrl) {
     content = <img src={sourceUrl} alt="Source artwork" draggable={false} />
-  } else if (viewMode === 'outline' && outlineUrl) {
+  } else if (viewMode === 'outline' && outlineSvg) {
     content = (
-      <img
-        src={outlineUrl}
-        alt="Smooth vector outline"
-        draggable={false}
+      <div
+        className="preview-svg"
+        role="img"
+        aria-label="Smooth vector outline"
+        dangerouslySetInnerHTML={{ __html: outlineSvg }}
       />
     )
-  } else if (viewMode === 'vector' && vectorUrl) {
+  } else if (viewMode === 'vector' && vectorSvg) {
     content = (
-      <img src={vectorUrl} alt="Color-quantized vector preview" draggable={false} />
+      <div
+        className="preview-svg"
+        role="img"
+        aria-label="Color-quantized vector preview"
+        dangerouslySetInnerHTML={{ __html: vectorSvg }}
+      />
     )
   }
 
   return (
-    <ZoomableStage busy={busy} resetKey={`${viewMode}:${sourceUrl}:${vectorUrl}:${outlineUrl}`}>
+    <ZoomableStage busy={busy} resetKey={`${viewMode}:${sourceUrl}:${vectorSvg?.length ?? 0}:${outlineSvg?.length ?? 0}`}>
       {content}
     </ZoomableStage>
   )
