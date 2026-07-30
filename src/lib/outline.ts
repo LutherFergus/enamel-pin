@@ -178,8 +178,9 @@ function maskToSvg(
   const contours = extractColorContours(labels, up.w, up.h, minArea)
   const fill = invert ? '#ffffff' : '#120e0c'
   const parts: string[] = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">`,
-    '<g id="outline" fill-rule="evenodd">',
+    // Explicit transparent canvas — no backdrop <rect>, so paper/holes stay see-through.
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" style="background:transparent">`,
+    '<g id="outline">',
   ]
   let pathCount = 0
   for (const components of contours.values()) {
@@ -191,7 +192,10 @@ function maskToSvg(
       // High corner angle → nearly all cubic; only knife-sharp bends stay L.
       const d = ringsToSvgD(processed, true, 105)
       if (!d) continue
-      parts.push(`<path fill="${fill}" stroke="none" d="${d}" />`)
+      // fill-rule on each path so holes stay transparent in Illustrator/Figma/browsers.
+      parts.push(
+        `<path fill="${fill}" fill-rule="evenodd" fill-opacity="1" stroke="none" d="${d}" />`,
+      )
       pathCount++
     }
   }

@@ -310,6 +310,7 @@ img {
 .preview-stage .preview-zoom-layer > .preview-svg {
   display: grid;
   place-items: center;
+  background: transparent;
 }
 
 .preview-stage .preview-zoom-layer > .preview-svg > svg {
@@ -317,6 +318,7 @@ img {
   width: 100% !important;
   height: 100% !important;
   overflow: visible;
+  background: transparent;
 }
 
 .preview-zoom-layer > .empty-state {
