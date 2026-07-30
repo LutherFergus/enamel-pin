@@ -99,17 +99,32 @@ export function nearestPms(rgb: Rgb, chart = getPmsChart()): PmsMatch {
   return { pms: best, deltaE: bestDe }
 }
 
-/** Snap a palette of RGB colors onto unique nearest PMS swatches when possible. */
+/**
+ * Snap palette RGB → PMS.
+ * When `areas` is provided, majority colors are assigned first so primary
+ * fills keep their true nearest swatch. If uniqueness would force a large
+ * ΔE jump, keep the vivid source RGB (still report nearest PMS metadata).
+ */
 export function snapPaletteToPms(
   palette: Rgb[],
-  opts: { unique?: boolean } = {},
+  opts: { unique?: boolean; areas?: number[]; maxDeltaE?: number } = {},
 ): Array<{ rgb: Rgb; match: PmsMatch }> {
   const unique = opts.unique ?? true
+  const maxDeltaE = opts.maxDeltaE ?? 22
   const chart = getPmsChart()
   const used = new Set<string>()
-  const out: Array<{ rgb: Rgb; match: PmsMatch }> = []
+  const out: Array<{ rgb: Rgb; match: PmsMatch } | null> = Array.from(
+    { length: palette.length },
+    () => null,
+  )
 
-  for (const color of palette) {
+  const order = palette.map((_, i) => i)
+  if (opts.areas && opts.areas.length === palette.length) {
+    order.sort((a, b) => (opts.areas![b] ?? 0) - (opts.areas![a] ?? 0))
+  }
+
+  for (const index of order) {
+    const color = palette[index]
     const lab = rgbToLab(color)
     const ranked = chart
       .map((pms) => ({ pms, deltaE: deltaE76(lab, pms.lab) }))
@@ -118,15 +133,35 @@ export function snapPaletteToPms(
     let chosen = ranked[0]
     if (unique) {
       const free = ranked.find((m) => !used.has(m.pms.code))
-      if (free) chosen = free
+      if (free) {
+        // Don't mute a vivid primary just to satisfy uniqueness.
+        if (free.deltaE <= maxDeltaE || free.deltaE <= ranked[0].deltaE + 6) {
+          chosen = free
+        } else {
+          // Keep source RGB; metadata still points at true nearest PMS.
+          chosen = ranked[0]
+        }
+      }
     }
+
     used.add(chosen.pms.code)
-    out.push({
-      rgb: { r: chosen.pms.r, g: chosen.pms.g, b: chosen.pms.b },
+    const useSource = chosen.deltaE > maxDeltaE
+    out[index] = {
+      rgb: useSource
+        ? { r: color.r, g: color.g, b: color.b }
+        : { r: chosen.pms.r, g: chosen.pms.g, b: chosen.pms.b },
       match: chosen,
-    })
+    }
   }
-  return out
+
+  return out.map((entry, i) => {
+    if (entry) return entry
+    const match = nearestPms(palette[i], chart)
+    return {
+      rgb: { r: match.pms.r, g: match.pms.g, b: match.pms.b },
+      match,
+    }
+  })
 }
 
 export function findPmsByCode(code: string): PmsColor | undefined {

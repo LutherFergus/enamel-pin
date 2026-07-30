@@ -1,15 +1,14 @@
-import { denoiseLabels, extractPalette, quantizeImage } from './quantize'
-import { mergeSmallRegions } from './regions'
+import { knockOutSolidBackground } from './background'
 import type { Rgb } from './types'
 
 export type OutlineSettings = {
   /**
-   * Detail level 0–100.
-   * Lower = fewer flat colors = cleaner enamel die-lines.
-   * Higher = more internal strokes.
+   * Ink threshold / detail 0–100.
+   * Lower = only the darkest metal walls (cleaner).
+   * Higher = includes lighter hatches / thinner strokes.
    */
   sensitivity: number
-  /** Stroke thickness in pixels (1–8). */
+  /** Extra stroke thicken in pixels (0–6). Prefer 1–2 for clean die-lines. */
   thickness: number
   /** Invert: white strokes on transparent instead of black. */
   invert: boolean
@@ -18,10 +17,10 @@ export type OutlineSettings = {
 }
 
 export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
-  sensitivity: 28,
-  thickness: 3,
+  sensitivity: 42,
+  thickness: 1,
   invert: false,
-  maxDim: 900,
+  maxDim: 1100,
 }
 
 export type OutlineResult = {
@@ -44,27 +43,18 @@ function drawScaled(
   canvas.width = w
   canvas.height = h
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!
-  // Slight blur while scaling reduces generative-art grit before posterize
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(source, 0, 0, w, h)
   return { canvas, ctx, w, h }
 }
 
-function colorCountFromSensitivity(sensitivity: number): number {
-  // 0 → 3 colors, 50 → 6, 100 → 10
-  return Math.max(3, Math.min(10, Math.round(3 + (sensitivity / 100) * 7)))
-}
-
-function minRegionRatioFromSensitivity(sensitivity: number): number {
-  // Lower sensitivity → more aggressive speck cleanup
-  const t = 1 - sensitivity / 100
-  return 0.0008 + t * 0.004
-}
-
 /**
- * Enamel-pin die-line outline: posterize to flat colors, then stroke only
- * where colors meet (+ outer silhouette). Avoids noisy photographic edges.
+ * Soft-enamel die-line outline.
+ *
+ * Prefer extracting the existing dark ink / metal walls from pin art
+ * (clean, REF-like) instead of inventing fuzzy photo edges or flooded
+ * color-boundary blobs.
  */
 export async function extractOutlinePng(
   source: HTMLImageElement | ImageBitmap,
@@ -73,33 +63,25 @@ export async function extractOutlinePng(
   const { canvas, ctx, w, h } = drawScaled(source, settings.maxDim)
   const imageData = ctx.getImageData(0, 0, w, h)
 
-  // Knock out near-white / checker-ish backgrounds so outer silhouette is clean
-  knockOutLightBackground(imageData)
+  knockOutSolidBackground(imageData)
 
-  const colors = colorCountFromSensitivity(settings.sensitivity)
-  const palette = extractPalette(imageData, colors, 2)
-  let labels = quantizeImage(imageData, palette)
-  labels = denoiseLabels(labels, w, h, 3)
+  let mask = extractInkMask(imageData, settings.sensitivity)
 
-  const minArea = Math.max(24, Math.round(w * h * minRegionRatioFromSensitivity(settings.sensitivity)))
-  labels = mergeSmallRegions(labels, w, h, minArea)
-  labels = denoiseLabels(labels, w, h, 1)
+  // Drop tiny speck components (noise left of silhouettes, texture grit)
+  mask = removeSmallComponents(mask, w, h, Math.max(12, Math.round(w * h * 0.00004)))
 
-  let mask = boundaryMask(labels, w, h)
+  // Light cleanup — do NOT erode+dilate hard (that floods thin die-lines)
+  mask = majorityClean(mask, w, h)
 
-  // Remove isolated speck strokes
-  mask = erode(mask, w, h, 1)
-  mask = dilate(mask, w, h, 1)
-
-  const thickness = Math.max(1, Math.min(8, Math.round(settings.thickness)))
-  if (thickness > 1) {
-    mask = dilate(mask, w, h, thickness - 1)
+  const thickness = Math.max(0, Math.min(6, Math.round(settings.thickness)))
+  if (thickness > 0) {
+    mask = dilate(mask, w, h, thickness)
   }
 
   const out = ctx.createImageData(w, h)
   const stroke: Rgb = settings.invert
     ? { r: 255, g: 255, b: 255 }
-    : { r: 18, g: 16, b: 14 }
+    : { r: 12, g: 10, b: 9 }
 
   for (let i = 0; i < w * h; i++) {
     const o = i * 4
@@ -134,69 +116,164 @@ export async function extractOutlinePng(
   }
 }
 
-/** Treat very light / empty pixels as transparent so outlines hug the pin. */
-function knockOutLightBackground(imageData: ImageData) {
+/**
+ * Build an ink/metal-wall mask from dark stroke pixels.
+ * Sensitivity maps to luminance threshold + local-contrast gate.
+ */
+function extractInkMask(imageData: ImageData, sensitivity: number): Uint8Array {
   const { data, width, height } = imageData
-  // Sample corners to detect light backdrop
-  const corners = [
-    0,
-    (width - 1) * 4,
-    (height - 1) * width * 4,
-    ((height - 1) * width + width - 1) * 4,
-  ]
-  let lightCorners = 0
-  for (const o of corners) {
-    if (data[o + 3] < 16) {
-      lightCorners++
+  const n = width * height
+  const lum = new Float32Array(n)
+  let opaque = 0
+  let darkish = 0
+
+  for (let i = 0; i < n; i++) {
+    const o = i * 4
+    if (data[o + 3] < 128) {
+      lum[i] = 255
       continue
     }
-    if (data[o] > 230 && data[o + 1] > 230 && data[o + 2] > 230) lightCorners++
+    opaque++
+    const y = 0.2126 * data[o] + 0.7152 * data[o + 1] + 0.0722 * data[o + 2]
+    lum[i] = y
+    if (y < 70) darkish++
   }
-  if (lightCorners < 2) return
 
-  for (let i = 0; i < width * height; i++) {
-    const o = i * 4
-    if (data[o + 3] < 16) continue
-    if (data[o] >= 245 && data[o + 1] >= 245 && data[o + 2] >= 245) {
-      data[o + 3] = 0
+  // Line-art vs color pin art: line art is mostly dark+light with little mid chroma.
+  const lineArtBias = opaque > 0 && darkish / opaque > 0.12
+
+  // Higher sensitivity → include lighter greys / thinner hatches
+  const t = Math.max(0, Math.min(100, sensitivity)) / 100
+  const inkCeil = lineArtBias ? 48 + t * 90 : 28 + t * 55
+  const contrastMin = lineArtBias ? 10 + (1 - t) * 18 : 14 + (1 - t) * 22
+
+  const mask = new Uint8Array(n)
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const i = y * width + x
+      const o = i * 4
+      if (data[o + 3] < 128) continue
+
+      const L = lum[i]
+      if (L > inkCeil + 40) continue
+
+      // Local contrast: ink sits next to lighter fills
+      let maxN = 0
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue
+          const v = lum[(y + dy) * width + (x + dx)]
+          if (v > maxN) maxN = v
+        }
+      }
+      const contrast = maxN - L
+
+      // Near-black always counts as metal wall on pin art
+      const nearBlack = L <= inkCeil * 0.55 && chromaAt(data, o) < 35
+      const darkEdge = L <= inkCeil && contrast >= contrastMin
+      const strongInk = L <= 22
+
+      if (nearBlack || darkEdge || strongInk) mask[i] = 255
+    }
+  }
+
+  // Also keep outer silhouette ring of the subject (die edge)
+  addSilhouetteRing(mask, data, width, height)
+
+  return mask
+}
+
+function chromaAt(data: Uint8ClampedArray, o: number): number {
+  return Math.max(data[o], data[o + 1], data[o + 2]) - Math.min(data[o], data[o + 1], data[o + 2])
+}
+
+function addSilhouetteRing(
+  mask: Uint8Array,
+  data: Uint8ClampedArray,
+  w: number,
+  h: number,
+) {
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x
+      const o = i * 4
+      if (data[o + 3] < 128) continue
+      let border = false
+      for (const [dx, dy] of [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ] as const) {
+        const no = ((y + dy) * w + (x + dx)) * 4
+        if (data[no + 3] < 128) {
+          border = true
+          break
+        }
+      }
+      if (border) mask[i] = 255
     }
   }
 }
 
-/** Stroke pixels where a label meets a different label or empty space. */
-function boundaryMask(labels: Uint16Array, w: number, h: number): Uint8Array {
-  const mask = new Uint8Array(w * h)
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = y * w + x
-      const v = labels[i]
-      if (v === 0xffff) continue
+function removeSmallComponents(
+  mask: Uint8Array,
+  w: number,
+  h: number,
+  minArea: number,
+): Uint8Array {
+  const seen = new Uint8Array(w * h)
+  const out = new Uint8Array(mask)
+  const stack: number[] = []
 
-      let edge = false
-      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) {
-        edge = true
-      } else {
-        const right = labels[i + 1]
-        const down = labels[i + w]
-        const left = labels[i - 1]
-        const up = labels[i - w]
-        if (
-          right !== v ||
-          down !== v ||
-          left !== v ||
-          up !== v ||
-          right === 0xffff ||
-          down === 0xffff ||
-          left === 0xffff ||
-          up === 0xffff
-        ) {
-          edge = true
-        }
+  for (let i = 0; i < w * h; i++) {
+    if (!mask[i] || seen[i]) continue
+    stack.length = 0
+    stack.push(i)
+    seen[i] = 1
+    const comp: number[] = []
+    while (stack.length) {
+      const cur = stack.pop()!
+      comp.push(cur)
+      const x = cur % w
+      const y = (cur / w) | 0
+      for (const [nx, ny] of [
+        [x - 1, y],
+        [x + 1, y],
+        [x, y - 1],
+        [x, y + 1],
+      ] as const) {
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+        const ni = ny * w + nx
+        if (seen[ni] || !mask[ni]) continue
+        seen[ni] = 1
+        stack.push(ni)
       }
-      if (edge) mask[i] = 255
+    }
+    if (comp.length < minArea) {
+      for (const p of comp) out[p] = 0
     }
   }
-  return mask
+  return out
+}
+
+function majorityClean(mask: Uint8Array, w: number, h: number): Uint8Array {
+  const out = new Uint8Array(mask)
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x
+      let on = 0
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (mask[(y + dy) * w + (x + dx)]) on++
+        }
+      }
+      // Remove isolated 1-px grit; keep real strokes
+      if (mask[i] && on <= 2) out[i] = 0
+      else if (!mask[i] && on >= 7) out[i] = 255
+    }
+  }
+  return out
 }
 
 function dilate(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
@@ -215,27 +292,6 @@ function dilate(mask: Uint8Array, w: number, h: number, radius: number): Uint8Ar
           out[ny * w + nx] = 255
         }
       }
-    }
-  }
-  return out
-}
-
-function erode(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
-  if (radius <= 0) return mask
-  const out = new Uint8Array(w * h)
-  for (let y = radius; y < h - radius; y++) {
-    for (let x = radius; x < w - radius; x++) {
-      if (!mask[y * w + x]) continue
-      let keep = true
-      for (let dy = -radius; dy <= radius && keep; dy++) {
-        for (let dx = -radius; dx <= radius; dx++) {
-          if (!mask[(y + dy) * w + (x + dx)]) {
-            keep = false
-            break
-          }
-        }
-      }
-      if (keep) out[y * w + x] = 255
     }
   }
   return out

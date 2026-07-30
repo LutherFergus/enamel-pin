@@ -33,7 +33,8 @@ export function DualControls({ settings, onChange, disabled }: Props) {
         />
       </div>
       <p className="hint">
-        Lower = cleaner enamel die-lines. Higher = more internal strokes. Avoids textured noise.
+        Extracts existing dark metal walls / ink. Lower = only strongest die-lines. Higher =
+        includes thinner hatches.
       </p>
       <div className="field">
         <label>
@@ -42,15 +43,17 @@ export function DualControls({ settings, onChange, disabled }: Props) {
         </label>
         <input
           type="range"
-          min={1}
-          max={8}
+          min={0}
+          max={6}
           step={1}
           value={settings.outline.thickness}
           disabled={disabled}
           onChange={(e) => patchOutline({ thickness: Number(e.target.value) })}
         />
       </div>
-      <p className="hint">Transparent PNG of metal-style outlines only — flat color boundaries, not photo edges.</p>
+      <p className="hint">
+        Transparent PNG of ink die-lines only — not fuzzy photo edges or flooded fills.
+      </p>
 
       <h2>Color vector (SVG)</h2>
       <div className="field">
@@ -60,8 +63,8 @@ export function DualControls({ settings, onChange, disabled }: Props) {
         </label>
         <input
           type="range"
-          min={2}
-          max={16}
+          min={4}
+          max={18}
           step={1}
           value={settings.vector.colorCount}
           disabled={disabled}
@@ -69,7 +72,8 @@ export function DualControls({ settings, onChange, disabled }: Props) {
         />
       </div>
       <p className="hint">
-        Like Vectorizer.AI — flatten to N colors, then merge swatches or reassign PMS below.
+        Majority colors first (primary → secondary → tertiary accents). Keeps vivid detail
+        colors instead of averaging them into muted midtones.
       </p>
 
       <label className="check-row">

@@ -1,195 +1,133 @@
 /**
- * Moore neighborhood contour tracing for quantized label maps.
- * Returns closed rings as point lists in pixel space (pixel centers).
+ * Convert a quantized label map into closed SVG path rings.
+ * Uses horizontal run-length encoding + vertical rectangle merge —
+ * reliable for enamel fills (no fragile border-following).
  */
 
 export type Point = { x: number; y: number }
 
-const NEIGHBORS: Point[] = [
-  { x: 1, y: 0 },
-  { x: 1, y: 1 },
-  { x: 0, y: 1 },
-  { x: -1, y: 1 },
-  { x: -1, y: 0 },
-  { x: -1, y: -1 },
-  { x: 0, y: -1 },
-  { x: 1, y: -1 },
-]
+type Rect = { x: number; y: number; w: number; h: number }
 
-function inBounds(x: number, y: number, w: number, h: number): boolean {
-  return x >= 0 && y >= 0 && x < w && y < h
+function rectsToPath(rects: Rect[]): Point[] {
+  // Emit each rect as its own closed ring; caller joins with multiple subpaths.
+  // For SVG we return a sentinel empty list when using multi-subpath helper.
+  void rects
+  return []
 }
 
-function isForeground(
-  labels: Uint16Array,
-  width: number,
-  height: number,
-  x: number,
-  y: number,
-  colorIndex: number,
-): boolean {
-  if (!inBounds(x, y, width, height)) return false
-  return labels[y * width + x] === colorIndex
-}
-
-/**
- * Trace outer contour of a connected region starting at a boundary pixel.
- * Uses Moore neighborhood (clockwise).
- */
-function traceContour(
-  labels: Uint16Array,
-  width: number,
-  height: number,
-  startX: number,
-  startY: number,
-  colorIndex: number,
-  visitedEdge: Uint8Array,
-): Point[] | null {
-  const startIdx = startY * width + startX
-  if (visitedEdge[startIdx]) return null
-
-  const path: Point[] = []
-  let x = startX
-  let y = startY
-  // Entered from the left — start looking from north-west relative to entry
-  let dir = 0 // index into NEIGHBORS: facing right initially after finding left border
-
-  // Find initial direction: we were scanning L→R, so backtrack from west
-  for (let d = 0; d < 8; d++) {
-    const nx = x + NEIGHBORS[d].x
-    const ny = y + NEIGHBORS[d].y
-    if (!isForeground(labels, width, height, nx, ny, colorIndex)) {
-      dir = (d + 1) % 8
-      break
-    }
+/** Build SVG path `d` with one subpath per merged rectangle. */
+export function rectsToSvgD(rects: Rect[]): string {
+  const parts: string[] = []
+  for (const r of rects) {
+    const x = r.x
+    const y = r.y
+    const x2 = r.x + r.w
+    const y2 = r.y + r.h
+    parts.push(`M ${x} ${y} L ${x2} ${y} L ${x2} ${y2} L ${x} ${y2} Z`)
   }
-
-  const maxSteps = width * height * 2
-  let steps = 0
-
-  do {
-    path.push({ x: x + 0.5, y: y + 0.5 })
-    visitedEdge[y * width + x] = 1
-
-    // Look for next boundary pixel starting from dir-1 (backtrack one)
-    let found = false
-    const startDir = (dir + 6) % 8 // turn left relative to previous move
-    for (let i = 0; i < 8; i++) {
-      const d = (startDir + i) % 8
-      const nx = x + NEIGHBORS[d].x
-      const ny = y + NEIGHBORS[d].y
-      if (isForeground(labels, width, height, nx, ny, colorIndex)) {
-        x = nx
-        y = ny
-        dir = d
-        found = true
-        break
-      }
-    }
-    if (!found) break
-    steps++
-  } while ((x !== startX || y !== startY) && steps < maxSteps)
-
-  if (path.length < 3) return null
-  return path
+  return parts.join(' ')
 }
 
 /**
- * Extract simplified outer contours for each color index present.
- * One contour per connected component (outer only for MVP fills).
+ * Scanline RLE → vertically merged rectangles per color index.
  */
 export function extractColorContours(
   labels: Uint16Array,
   width: number,
   height: number,
 ): Map<number, Point[][]> {
-  const contoursByColor = new Map<number, Point[][]>()
-  const visited = new Uint8Array(width * height)
-  const colorVisited = new Map<number, Uint8Array>()
+  // Kept for API compatibility: returns rectangle corners as 4-point rings.
+  const rectsByColor = extractColorRects(labels, width, height)
+  const out = new Map<number, Point[][]>()
+  for (const [color, rects] of rectsByColor) {
+    out.set(
+      color,
+      rects.map((r) => [
+        { x: r.x, y: r.y },
+        { x: r.x + r.w, y: r.y },
+        { x: r.x + r.w, y: r.y + r.h },
+        { x: r.x, y: r.y + r.h },
+      ]),
+    )
+  }
+  return out
+}
+
+export function extractColorRects(
+  labels: Uint16Array,
+  width: number,
+  height: number,
+): Map<number, Rect[]> {
+  const active = new Map<number, Rect[]>() // color → open rects on previous row
+  const finished = new Map<number, Rect[]>()
+
+  const pushFinished = (color: number, rect: Rect) => {
+    const list = finished.get(color) ?? []
+    list.push(rect)
+    finished.set(color, list)
+  }
 
   for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = y * width + x
-      const color = labels[i]
-      if (color === 0xffff || visited[i]) continue
+    const rowRuns = new Map<number, Array<{ x: number; w: number }>>()
 
-      // Flood to mark connected component, collect boundary starts
-      const stack = [i]
-      visited[i] = 1
-      const component: number[] = []
-      while (stack.length) {
-        const cur = stack.pop()!
-        component.push(cur)
-        const cx = cur % width
-        const cy = (cur / width) | 0
-        for (const [dx, dy] of [
-          [1, 0],
-          [-1, 0],
-          [0, 1],
-          [0, -1],
-        ] as const) {
-          const nx = cx + dx
-          const ny = cy + dy
-          if (!inBounds(nx, ny, width, height)) continue
-          const ni = ny * width + nx
-          if (visited[ni] || labels[ni] !== color) continue
-          visited[ni] = 1
-          stack.push(ni)
-        }
+    let x = 0
+    while (x < width) {
+      const color = labels[y * width + x]
+      if (color === 0xffff) {
+        x++
+        continue
       }
+      const start = x
+      x++
+      while (x < width && labels[y * width + x] === color) x++
+      const runs = rowRuns.get(color) ?? []
+      runs.push({ x: start, w: x - start })
+      rowRuns.set(color, runs)
+    }
 
-      // Find leftmost-topmost pixel that has a non-color neighbor (boundary)
-      let startX = -1
-      let startY = -1
-      let best = Infinity
-      for (const p of component) {
-        const px = p % width
-        const py = (p / width) | 0
-        const key = py * width + px
-        let boundary = false
-        for (const [dx, dy] of [
-          [1, 0],
-          [-1, 0],
-          [0, 1],
-          [0, -1],
-        ] as const) {
-          if (!isForeground(labels, width, height, px + dx, py + dy, color)) {
-            boundary = true
+    // Colors that had open rects but no runs this row → close them.
+    for (const [color, opens] of [...active.entries()]) {
+      if (!rowRuns.has(color)) {
+        for (const r of opens) pushFinished(color, r)
+        active.delete(color)
+      }
+    }
+
+    for (const [color, runs] of rowRuns) {
+      const prev = active.get(color) ?? []
+      const nextOpen: Rect[] = []
+      const usedPrev = new Uint8Array(prev.length)
+
+      for (const run of runs) {
+        let merged = false
+        for (let i = 0; i < prev.length; i++) {
+          if (usedPrev[i]) continue
+          const r = prev[i]
+          if (r.x === run.x && r.w === run.w && r.y + r.h === y) {
+            r.h += 1
+            nextOpen.push(r)
+            usedPrev[i] = 1
+            merged = true
             break
           }
         }
-        if (!boundary) continue
-        if (key < best) {
-          best = key
-          startX = px
-          startY = py
+        if (!merged) {
+          nextOpen.push({ x: run.x, y, w: run.w, h: 1 })
         }
       }
 
-      if (startX < 0) continue
-
-      if (!colorVisited.has(color)) {
-        colorVisited.set(color, new Uint8Array(width * height))
+      for (let i = 0; i < prev.length; i++) {
+        if (!usedPrev[i]) pushFinished(color, prev[i])
       }
-      const edgeVisited = colorVisited.get(color)!
-      const contour = traceContour(
-        labels,
-        width,
-        height,
-        startX,
-        startY,
-        color,
-        edgeVisited,
-      )
-      if (!contour) continue
-
-      const list = contoursByColor.get(color) ?? []
-      list.push(contour)
-      contoursByColor.set(color, list)
+      active.set(color, nextOpen)
     }
   }
 
-  return contoursByColor
+  for (const [color, opens] of active) {
+    for (const r of opens) pushFinished(color, r)
+  }
+
+  return finished
 }
 
 /** Ramer–Douglas–Peucker simplification. */
@@ -232,11 +170,11 @@ function perpendicularDistance(p: Point, a: Point, b: Point): number {
 /** Chaikin corner-cutting for softer enamel-friendly curves. */
 export function smoothPath(points: Point[], iterations: number): Point[] {
   let pts = points
-  for (let iter = 0; iter < iterations; iter++) {
+  const iters = Math.min(2, Math.max(0, Math.round(iterations)))
+  for (let iter = 0; iter < iters; iter++) {
     if (pts.length < 3) break
     const next: Point[] = []
     const n = pts.length
-    // Treat as closed ring
     for (let i = 0; i < n; i++) {
       const a = pts[i]
       const b = pts[(i + 1) % n]
@@ -256,6 +194,11 @@ export function smoothPath(points: Point[], iterations: number): Point[] {
 
 export function pathToSvgD(points: Point[], closed = true): string {
   if (points.length === 0) return ''
+  // Rectangle rings: skip Chaikin-smoothed nonsense — emit crisp corners.
+  if (points.length === 4) {
+    const [a, b, c, d] = points
+    return `M ${fmt(a.x)} ${fmt(a.y)} L ${fmt(b.x)} ${fmt(b.y)} L ${fmt(c.x)} ${fmt(c.y)} L ${fmt(d.x)} ${fmt(d.y)} Z`
+  }
   const [first, ...rest] = points
   let d = `M ${fmt(first.x)} ${fmt(first.y)}`
   for (const p of rest) {
@@ -268,3 +211,7 @@ export function pathToSvgD(points: Point[], closed = true): string {
 function fmt(n: number): string {
   return (Math.round(n * 100) / 100).toString()
 }
+
+// silence unused in case tree-shaken differently
+void rectsToPath
+void rectsToSvgD

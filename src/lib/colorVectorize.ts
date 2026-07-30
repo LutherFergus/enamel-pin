@@ -1,7 +1,8 @@
+import { knockOutSolidBackground } from './background'
 import { extractColorContours, pathToSvgD, simplifyPath, smoothPath } from './contours'
 import type { Point } from './contours'
 import { findPmsByCode, nearestPms, snapPaletteToPms } from './pms'
-import { denoiseLabels, extractPalette, quantizeImage } from './quantize'
+import { countLabelUsage, denoiseLabels, extractPalette, quantizeImage } from './quantize'
 import { labelRegions, mergeSmallRegions } from './regions'
 import type { PaletteColor, Rgb } from './types'
 import { colorDistance, rgbToHex } from './types'
@@ -17,10 +18,10 @@ export type ColorVectorSettings = {
 }
 
 export const DEFAULT_COLOR_VECTOR_SETTINGS: ColorVectorSettings = {
-  colorCount: 8,
-  minRegionRatio: 0.0004,
-  smoothness: 2,
-  maxDim: 900,
+  colorCount: 12,
+  minRegionRatio: 0.00025,
+  smoothness: 1.5,
+  maxDim: 1100,
   snapToPms: true,
 }
 
@@ -65,12 +66,16 @@ function scaleToCanvas(
 }
 
 function processContour(points: Point[], smoothness: number): Point[] {
-  const epsilon = 0.55 + (5 - Math.min(5, smoothness)) * 0.12
+  // Scanline rect rings stay crisp — smoothing turns enamel fills into mush.
+  if (points.length <= 4) return points
+  const epsilon = 0.35 + (5 - Math.min(5, smoothness)) * 0.06
   let pts = simplifyPath(points, epsilon)
+  if (pts.length < 4) return points
   if (smoothness > 0) {
     pts = smoothPath(pts, smoothness)
-    pts = simplifyPath(pts, Math.max(0.25, epsilon * 0.5))
+    pts = simplifyPath(pts, Math.max(0.2, epsilon * 0.45))
   }
+  if (pts.length < 4) return points
   return pts
 }
 
@@ -143,6 +148,7 @@ function resolvePaletteColors(
   usedIndices: number[],
   snapToPms: boolean,
   overrides: PmsOverrides,
+  areas?: number[],
 ): { fillRgb: Rgb[]; meta: PaletteColor[] } {
   const fillRgb = basePalette.map((c) => ({ ...c }))
   const meta: PaletteColor[] = basePalette.map((c, index) => ({
@@ -152,12 +158,16 @@ function resolvePaletteColors(
   }))
 
   if (snapToPms) {
-    const snapped = snapPaletteToPms(basePalette, { unique: true })
+    const snapped = snapPaletteToPms(basePalette, {
+      unique: true,
+      areas,
+      maxDeltaE: 20,
+    })
     for (let i = 0; i < basePalette.length; i++) {
       fillRgb[i] = snapped[i].rgb
       meta[i] = {
         ...snapped[i].rgb,
-        hex: snapped[i].match.pms.hex,
+        hex: rgbToHex(snapped[i].rgb),
         index: i,
         pmsCode: snapped[i].match.pms.code,
         pmsName: snapped[i].match.pms.name,
@@ -283,11 +293,13 @@ function assemble(
     if (labels[i] !== 0xffff) used.add(labels[i])
   }
   const usedIndices = [...used]
+  const areas = countLabelUsage(labels, basePalette.length)
   const { fillRgb, meta } = resolvePaletteColors(
     basePalette,
     usedIndices,
     snapToPms,
     overrides,
+    areas,
   )
   const metaByIndex = new Map(meta.map((c) => [c.index, c]))
   const { svg, regionCount } = stateToSvg(
@@ -311,13 +323,16 @@ export async function vectorizeColors(
   overrides: PmsOverrides = {},
 ): Promise<ColorVectorResult> {
   const imageData = scaleToCanvas(source, settings.maxDim)
+  // Product-photo backdrops must not become the "primary" palette color.
+  knockOutSolidBackground(imageData)
   const { width, height } = imageData
   const palette = extractPalette(imageData, settings.colorCount)
   let labels = quantizeImage(imageData, palette)
-  labels = denoiseLabels(labels, width, height, 2)
+  // One light denoise pass — extra passes erase tertiary accent colors.
+  labels = denoiseLabels(labels, width, height, 1)
 
   const minArea = Math.max(
-    8,
+    6,
     Math.round(width * height * settings.minRegionRatio),
   )
   labels = mergeSmallRegions(labels, width, height, minArea)
