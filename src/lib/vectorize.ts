@@ -1,4 +1,4 @@
-import { extractColorContours, pathToSvgD, simplifyPath, smoothPath } from './contours'
+import { extractColorContours, pathToSvgD, ringsToSvgD, simplifyPath, smoothPath } from './contours'
 import type { Point } from './contours'
 import { denoiseLabels, extractPalette, quantizeImage } from './quantize'
 import { labelRegions, mergeSmallRegions } from './regions'
@@ -218,8 +218,8 @@ export function vectorizeToSvg(
     outerLabels[i] = labels[i] === 0xffff ? 0xffff : 0
   }
   const outerContours = extractColorContours(outerLabels, widthPx, heightPx)
-  const outerPaths = (outerContours.get(0) ?? []).map((c) =>
-    processContour(c, settings.smoothness, simplifyEpsilon),
+  const outerPaths = (outerContours.get(0) ?? []).map((rings) =>
+    processContour(rings[0] ?? [], settings.smoothness, simplifyEpsilon),
   )
 
   const parts: string[] = []
@@ -229,14 +229,16 @@ export function vectorizeToSvg(
   parts.push('<g id="enamel-fills">')
 
   const usedColors = new Set<number>()
-  for (const [colorIndex, contours] of contoursByColor) {
+  for (const [colorIndex, components] of contoursByColor) {
     usedColors.add(colorIndex)
     const fill = rgbToHex(palette[colorIndex])
-    for (const contour of contours) {
-      const pts = processContour(contour, settings.smoothness, simplifyEpsilon)
-      const d = pathToSvgD(pts)
+    for (const rings of components) {
+      const processed = rings
+        .map((ring) => processContour(ring, settings.smoothness, simplifyEpsilon))
+        .filter((ring) => ring.length >= 3)
+      const d = ringsToSvgD(processed)
       if (!d) continue
-      parts.push(`<path fill="${fill}" stroke="none" d="${d}" />`)
+      parts.push(`<path fill="${fill}" fill-rule="evenodd" stroke="none" d="${d}" />`)
     }
   }
   parts.push('</g>')
