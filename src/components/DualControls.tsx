@@ -52,7 +52,8 @@ export function DualControls({ settings, onChange, disabled }: Props) {
         />
       </div>
       <p className="hint">
-        1px = true single-line metal outlines between enamel fills (transparent PNG).
+        1px = thinnest die-line; 2px is the default metal weight. Higher values thicken the
+        clean boundary strokes only (transparent PNG).
       </p>
 
       <h2>Color vector (SVG)</h2>
