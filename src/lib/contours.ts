@@ -255,16 +255,57 @@ function turnAngle(a: Point, b: Point, c: Point): number {
 }
 
 /**
- * Corner-preserving cubic Bézier fit — real curve commands, not pixel stairs.
- * Sharp corners stay as line joins; smooth spans become C segments.
+ * Collapse raster stair-steps (unit orthognal zigzags) into diagonals.
+ * Keeps real long edges / sharp enamel corners intact.
+ */
+export function destairPath(points: Point[], closed = true): Point[] {
+  if (points.length < 4) return points
+  const pts: Point[] = []
+  for (const p of points) {
+    const prev = pts[pts.length - 1]
+    if (prev && prev.x === p.x && prev.y === p.y) continue
+    pts.push(p)
+  }
+  if (pts.length < 4) return pts
+
+  const n = pts.length
+  const keep = new Array<boolean>(n).fill(true)
+  const at = (i: number) => pts[((i % n) + n) % n]
+
+  for (let i = 0; i < n; i++) {
+    if (!closed && (i === 0 || i === n - 1)) continue
+    const a = at(i - 1)
+    const b = at(i)
+    const c = at(i + 1)
+    const dIn = Math.hypot(b.x - a.x, b.y - a.y)
+    const dOut = Math.hypot(c.x - b.x, c.y - b.y)
+    // Any axis-aligned ~90° stair with a ≤2px riser (tread may be longer).
+    if (Math.min(dIn, dOut) > 2.05) continue
+    const axisIn = Math.abs(b.x - a.x) < 0.01 || Math.abs(b.y - a.y) < 0.01
+    const axisOut = Math.abs(c.x - b.x) < 0.01 || Math.abs(c.y - b.y) < 0.01
+    if (!axisIn || !axisOut) continue
+    const turn = turnAngle(a, b, c)
+    if (Math.abs(turn - Math.PI / 2) < 0.4) keep[i] = false
+  }
+
+  const out = pts.filter((_, i) => keep[i])
+  return out.length >= 3 ? out : pts
+}
+
+/**
+ * Corner-preserving cubic Bézier path that visits EVERY vertex.
+ * Uses Catmull–Rom→cubic conversion (low tension) so curves follow the
+ * contour instead of leaping chord-to-chord across skipped midpoints.
+ * Sharp enamel corners stay as hard line joins.
  */
 export function pathToSmoothSvgD(
   points: Point[],
   closed = true,
-  cornerAngleDeg = 55,
+  cornerAngleDeg = 52,
 ): string {
   if (points.length === 0) return ''
-  let pts = collapseCollinear(points, closed)
+  let pts = destairPath(points, closed)
+  pts = collapseCollinear(pts, closed)
   if (pts.length < 3) return pathToSvgD(pts, closed)
 
   const n = pts.length
@@ -278,53 +319,53 @@ export function pathToSmoothSvgD(
     const a = pts[(i - 1 + n) % n]
     const b = pts[i]
     const c = pts[(i + 1) % n]
-    isCorner[i] = turnAngle(a, b, c) > cornerThresh
+    const turn = turnAngle(a, b, c)
+    if (turn <= cornerThresh) continue
+    const lenIn = Math.hypot(b.x - a.x, b.y - a.y)
+    const lenOut = Math.hypot(c.x - b.x, c.y - b.y)
+    const axisIn = Math.abs(b.x - a.x) < 0.01 || Math.abs(b.y - a.y) < 0.01
+    const axisOut = Math.abs(c.x - b.x) < 0.01 || Math.abs(c.y - b.y) < 0.01
+    // Axis-aligned ~90° with a short riser (≤2px) = raster stair on a diagonal —
+    // never a hard enamel corner. Let Catmull–Rom curve through it.
+    if (
+      axisIn &&
+      axisOut &&
+      Math.abs(turn - Math.PI / 2) < 0.45 &&
+      Math.min(lenIn, lenOut) <= 2.05
+    ) {
+      continue
+    }
+    isCorner[i] = true
   }
 
-  if (!isCorner.some(Boolean)) {
-    for (let i = 0; i < n; i += Math.max(1, Math.floor(n / 6))) isCorner[i] = true
-    isCorner[0] = true
-  }
+  // Tension < 1 softens handles; /6 is classic CR — smoother than /8 on destaired paths.
+  const tension = 1 / 6
 
-  const anchors: number[] = []
-  for (let i = 0; i < n; i++) if (isCorner[i]) anchors.push(i)
-  if (anchors.length === 0) return pathToSvgD(pts, closed)
+  const at = (i: number) => pts[((i % n) + n) % n]
+  let d = `M ${fmt(pts[0].x)} ${fmt(pts[0].y)}`
+  const segCount = closed ? n : n - 1
 
-  // Unit tangent at point index, averaged from neighbors.
-  const tangentAt = (idx: number): Point => {
-    const a = pts[(idx - 1 + n) % n]
-    const c = pts[(idx + 1) % n]
-    const tx = c.x - a.x
-    const ty = c.y - a.y
-    const len = Math.hypot(tx, ty) || 1
-    return { x: tx / len, y: ty / len }
-  }
+  for (let i = 0; i < segCount; i++) {
+    const p0 = at(i - 1)
+    const p1 = at(i)
+    const p2 = at(i + 1)
+    const p3 = at(i + 2)
 
-  let d = `M ${fmt(pts[anchors[0]].x)} ${fmt(pts[anchors[0]].y)}`
-  const segCount = closed ? anchors.length : anchors.length - 1
-
-  for (let s = 0; s < segCount; s++) {
-    const i0 = anchors[s]
-    const i1 = anchors[(s + 1) % anchors.length]
-    // Count span length
-    let spanLen = 0
-    for (let i = i0; i !== i1; i = (i + 1) % n) spanLen++
-    const p0 = pts[i0]
-    const p3 = pts[i1]
-
-    if (spanLen <= 1) {
-      d += ` L ${fmt(p3.x)} ${fmt(p3.y)}`
+    // Hard corner at either endpoint → straight segment (preserve stars / box).
+    if (isCorner[i % n] || isCorner[(i + 1) % n]) {
+      d += ` L ${fmt(p2.x)} ${fmt(p2.y)}`
       continue
     }
 
-    const chord = Math.hypot(p3.x - p0.x, p3.y - p0.y) || 1
-    const handle = Math.min(chord * 0.22, spanLen * 0.35)
-    const t0 = tangentAt(i0)
-    const t1 = tangentAt(i1)
-    // Outgoing tangent at start, incoming at end — short handles avoid fill overshoot
-    const c1 = { x: p0.x + t0.x * handle, y: p0.y + t0.y * handle }
-    const c2 = { x: p3.x - t1.x * handle, y: p3.y - t1.y * handle }
-    d += ` C ${fmt(c1.x)} ${fmt(c1.y)} ${fmt(c2.x)} ${fmt(c2.y)} ${fmt(p3.x)} ${fmt(p3.y)}`
+    const c1 = {
+      x: p1.x + (p2.x - p0.x) * tension,
+      y: p1.y + (p2.y - p0.y) * tension,
+    }
+    const c2 = {
+      x: p2.x - (p3.x - p1.x) * tension,
+      y: p2.y - (p3.y - p1.y) * tension,
+    }
+    d += ` C ${fmt(c1.x)} ${fmt(c1.y)} ${fmt(c2.x)} ${fmt(c2.y)} ${fmt(p2.x)} ${fmt(p2.y)}`
   }
 
   if (closed) d += ' Z'
@@ -332,9 +373,15 @@ export function pathToSmoothSvgD(
 }
 
 /** Join outer + hole rings into one evenodd path `d`. */
-export function ringsToSvgD(rings: Point[][], smooth = false): string {
+export function ringsToSvgD(
+  rings: Point[][],
+  smooth = false,
+  cornerAngleDeg = 52,
+): string {
   return rings
-    .map((ring) => (smooth ? pathToSmoothSvgD(ring, true) : pathToSvgD(ring, true)))
+    .map((ring) =>
+      smooth ? pathToSmoothSvgD(ring, true, cornerAngleDeg) : pathToSvgD(ring, true),
+    )
     .filter(Boolean)
     .join(' ')
 }

@@ -22,13 +22,16 @@ const MAX_SCALE = 6
 
 export function Preview({ viewMode, sourceUrl, result, busy }: Props) {
   const [vectorUrl, setVectorUrl] = useState<string | null>(null)
+  const [outlineUrl, setOutlineUrl] = useState<string | null>(null)
 
   useEffect(() => {
     if (!result) {
       setVectorUrl(null)
+      setOutlineUrl(null)
       return
     }
     setVectorUrl(result.vector.svgUrl)
+    setOutlineUrl(result.outline.svgUrl)
   }, [result])
 
   if (!sourceUrl && !result) {
@@ -37,7 +40,7 @@ export function Preview({ viewMode, sourceUrl, result, busy }: Props) {
         <div className="empty-state">
           <h3>Upload or generate</h3>
           <p>
-            You’ll get two assets: a transparent stroke-outline PNG, and a flat-color
+            You’ll get two assets: a smooth vector outline SVG, and a flat-color
             vector SVG you can reduce by merging palette colors.
           </p>
         </div>
@@ -54,11 +57,11 @@ export function Preview({ viewMode, sourceUrl, result, busy }: Props) {
 
   if (viewMode === 'source' && sourceUrl) {
     content = <img src={sourceUrl} alt="Source artwork" draggable={false} />
-  } else if (viewMode === 'outline' && result) {
+  } else if (viewMode === 'outline' && outlineUrl) {
     content = (
       <img
-        src={result.outline.pngUrl}
-        alt="Stroke outline on transparent background"
+        src={outlineUrl}
+        alt="Smooth vector outline"
         draggable={false}
       />
     )
@@ -69,7 +72,7 @@ export function Preview({ viewMode, sourceUrl, result, busy }: Props) {
   }
 
   return (
-    <ZoomableStage busy={busy} resetKey={`${viewMode}:${sourceUrl}:${vectorUrl}:${result?.outline.pngUrl ?? ''}`}>
+    <ZoomableStage busy={busy} resetKey={`${viewMode}:${sourceUrl}:${vectorUrl}:${outlineUrl}`}>
       {content}
     </ZoomableStage>
   )

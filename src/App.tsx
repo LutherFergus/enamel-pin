@@ -200,7 +200,7 @@ export default function App() {
 
   const downloadOutline = useCallback(() => {
     if (!result) return
-    downloadBlob(result.outline.pngBlob, `${sourceName}-outline.png`)
+    downloadBlob(result.outline.svgBlob, `${sourceName}-outline.svg`)
   }, [result, sourceName])
 
   const downloadVector = useCallback(() => {
@@ -213,7 +213,7 @@ export default function App() {
     if (error) return error
     if (!result) return 'Upload an image or generate one with AI'
     const pmsCount = result.vector.palette.filter((c) => c.pmsCode).length
-    return `Outline PNG · ${result.vector.palette.length} fills · ${pmsCount} PMS · ${result.vector.regionCount} shapes`
+    return `Outline SVG · ${result.outline.pathCount} paths · ${result.vector.palette.length} fills · ${pmsCount} PMS · ${result.vector.regionCount} shapes`
   }, [busy, error, isPending, result])
 
   return (
@@ -224,8 +224,8 @@ export default function App() {
           <SaveScreenshotButton />
         </div>
         <p className="lede">
-          Upload or generate artwork for soft enamel pins, then get two outputs: a transparent
-          stroke-outline PNG and a flat-color vector SVG snapped to a pin-ready PMS chart.
+          Upload or generate artwork for soft enamel pins, then get two outputs: a smooth
+          vector outline SVG and a flat-color vector SVG snapped to a pin-ready PMS chart.
         </p>
       </header>
 
@@ -296,7 +296,7 @@ export default function App() {
               onClick={downloadOutline}
               disabled={!result || busy}
             >
-              Download outline PNG
+              Download outline SVG
             </button>
             <button
               type="button"

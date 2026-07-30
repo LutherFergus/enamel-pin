@@ -1,4 +1,4 @@
-import { collapseCollinear, extractColorContours, ringsToSvgD, simplifyPath } from './contours'
+import { collapseCollinear, destairPath, extractColorContours, ringsToSvgD, simplifyPath } from './contours'
 import type { Point } from './contours'
 import { analyzeLineArt, extractInkMask } from './lineArt'
 import { findPmsByCode, nearestPms, snapPaletteToPms } from './pms'
@@ -18,11 +18,11 @@ export type ColorVectorSettings = {
 }
 
 export const DEFAULT_COLOR_VECTOR_SETTINGS: ColorVectorSettings = {
-  colorCount: 16,
-  minRegionRatio: 0.0001,
+  colorCount: 12,
+  minRegionRatio: 0.0002,
   smoothness: 3,
-  maxDim: 1600,
-  snapToPms: false,
+  maxDim: 1200,
+  snapToPms: true,
 }
 
 /** Manual per-slot PMS overrides: palette index → PMS code like "185 C". */
@@ -106,10 +106,11 @@ function knockOutNearBlackBackdrop(imageData: ImageData) {
 function processContour(points: Point[], smoothness: number): Point[] {
   // Flatten pixel stairs, keep sharp enamel corners. Bézier conversion happens
   // at SVG emit time — Chaikin is avoided (it blobs star points / box corners).
-  if (smoothness <= 0) return collapseCollinear(points, true)
-  // Low epsilon keeps star points / trunk ridges; curves soften the stairs.
-  const epsilon = 0.55 + (5 - Math.min(5, smoothness)) * 0.1
-  let pts = simplifyPath(points, epsilon)
+  if (smoothness <= 0) return collapseCollinear(destairPath(points, true), true)
+  let pts = destairPath(points, true)
+  // Higher smoothness → longer curve spans (less lattice wiggle).
+  const epsilon = 0.7 + Math.min(5, smoothness) * 0.28
+  pts = simplifyPath(pts, epsilon)
   pts = collapseCollinear(pts, true)
   return pts
 }
@@ -282,7 +283,7 @@ function stateToSvg(
         .map((ring) => processContour(ring, smoothness))
         .filter((ring) => ring.length >= 3)
       if (!processed.length) continue
-      const d = ringsToSvgD(processed, smoothness > 0)
+      const d = ringsToSvgD(processed, smoothness > 0, 48)
       if (!d) continue
       parts.push(
         `<path fill="${fill}" fill-rule="evenodd" stroke="none"${pmsAttr} d="${d}" />`,
@@ -406,8 +407,10 @@ export async function vectorizeColors(
   // Higher fidelity for enamel cel art: keep thin black die-lines & highlights.
   const colorCount = Math.max(2, Math.min(32, settings.colorCount))
   const palette = extractPalette(colorData, colorCount, 1)
+  // Merge soft shade cousins FIRST, then pin a dedicated ink-black slot.
+  // (Doing black first made near-duplicate merge collapse browns/purples into pure black.)
+  mergeNearDuplicateColors(palette, 22)
   ensureBlackSlot(palette, colorData)
-  mergeNearDuplicateColors(palette, 28)
   let labels = quantizeImage(colorData, palette)
   labels = denoiseLabels(labels, cw, ch, 2)
 
@@ -464,9 +467,13 @@ function ensureBlackSlot(palette: Rgb[], imageData: ImageData) {
 /** Collapse near-identical enamel flats (kills hat grain / soft-shade speckles). */
 function mergeNearDuplicateColors(palette: Rgb[], maxDist: number) {
   for (let i = 0; i < palette.length; i++) {
+    const yi = 0.299 * palette[i].r + 0.587 * palette[i].g + 0.114 * palette[i].b
+    // Never merge into/from near-black — that wipes the whole pin to ink.
+    if (yi < 40) continue
     for (let j = i + 1; j < palette.length; j++) {
+      const yj = 0.299 * palette[j].r + 0.587 * palette[j].g + 0.114 * palette[j].b
+      if (yj < 40) continue
       if (colorDistance(palette[i], palette[j]) <= maxDist) {
-        // Pull j toward i (keep earlier / typically larger median-cut bucket)
         palette[j] = { ...palette[i] }
       }
     }

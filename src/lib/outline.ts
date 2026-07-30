@@ -1,4 +1,12 @@
 import {
+  collapseCollinear,
+  destairPath,
+  extractColorContours,
+  ringsToSvgD,
+  simplifyPath,
+  type Point,
+} from './contours'
+import {
   analyzeLineArt,
   extractInkMask,
   inkPreserved,
@@ -19,22 +27,28 @@ export type OutlineSettings = {
   thickness: number
   /** Invert: white strokes on transparent instead of black. */
   invert: boolean
-  /** Max working dimension for outline raster. */
+  /** Max working dimension for outline. */
   maxDim: number
 }
 
 export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
-  sensitivity: 85,
+  sensitivity: 60,
   thickness: 1,
   invert: false,
-  maxDim: 1600,
+  maxDim: 1400,
 }
 
 export type OutlineResult = {
+  /** Smooth vector die-lines (primary). */
+  svg: string
+  svgBlob: Blob
+  svgUrl: string
+  /** Raster preview / fallback download. */
   pngBlob: Blob
   pngUrl: string
   widthPx: number
   heightPx: number
+  pathCount: number
 }
 
 function drawScaled(
@@ -51,7 +65,6 @@ function drawScaled(
   canvas.width = w
   canvas.height = h
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!
-  // Line art: nearest-neighbor keeps strokes crisp. Color art: smooth then posterize.
   ctx.imageSmoothingEnabled = smooth
   ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(source, 0, 0, w, h)
@@ -67,7 +80,126 @@ function minRegionRatioFromSensitivity(sensitivity: number): number {
   return 0.0012 + t * 0.006
 }
 
-function maskToOutlineResult(
+function processOutlineContour(points: Point[], scale: number): Point[] {
+  // Points are in upsampled space — destair + moderate RDP, then scale down
+  // so SVG coords are fractional (true sub-pixel curves, not lattice stairs).
+  let pts = destairPath(points, true)
+  const epsilon = Math.min(3.2, Math.max(1.4, points.length / 220))
+  pts = simplifyPath(pts, epsilon)
+  pts = collapseCollinear(pts, true)
+  pts = simplifyPath(pts, Math.max(1.0, epsilon * 0.7))
+  if (scale === 1) return pts
+  return pts.map((p) => ({ x: p.x / scale, y: p.y / scale }))
+}
+
+/**
+ * Soften binary mask stairs before contouring.
+ * Box-blur + re-threshold rounds orthogonal jaggies into diagonal-ish edges
+ * so cubic SVG paths can look smooth instead of pixel-staired.
+ */
+function softenMaskStairs(mask: Uint8Array, w: number, h: number, passes = 2): Uint8Array {
+  let cur = mask
+  for (let pass = 0; pass < passes; pass++) {
+    const acc = new Float32Array(w * h)
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        let sum = 0
+        let wt = 0
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx
+            const ny = y + dy
+            if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+            const wgt = dx === 0 && dy === 0 ? 4 : dx === 0 || dy === 0 ? 2 : 1
+            sum += (cur[ny * w + nx] ? 1 : 0) * wgt
+            wt += wgt
+          }
+        }
+        acc[y * w + x] = sum / wt
+      }
+    }
+    const next = new Uint8Array(w * h)
+    for (let i = 0; i < w * h; i++) next[i] = acc[i] >= 0.45 ? 255 : 0
+    cur = next
+  }
+  return cur
+}
+
+/** Bilinear upsample of a binary mask — edges become soft diagonals at higher res. */
+function upsampleMask(
+  mask: Uint8Array,
+  w: number,
+  h: number,
+  factor: number,
+): { mask: Uint8Array; w: number; h: number } {
+  if (factor <= 1) return { mask, w, h }
+  const nw = w * factor
+  const nh = h * factor
+  const out = new Uint8Array(nw * nh)
+  for (let y = 0; y < nh; y++) {
+    for (let x = 0; x < nw; x++) {
+      const fx = x / factor
+      const fy = y / factor
+      const x0 = Math.min(w - 1, Math.floor(fx))
+      const y0 = Math.min(h - 1, Math.floor(fy))
+      const x1 = Math.min(w - 1, x0 + 1)
+      const y1 = Math.min(h - 1, y0 + 1)
+      const tx = fx - x0
+      const ty = fy - y0
+      const v00 = mask[y0 * w + x0] ? 1 : 0
+      const v10 = mask[y0 * w + x1] ? 1 : 0
+      const v01 = mask[y1 * w + x0] ? 1 : 0
+      const v11 = mask[y1 * w + x1] ? 1 : 0
+      const v =
+        v00 * (1 - tx) * (1 - ty) +
+        v10 * tx * (1 - ty) +
+        v01 * (1 - tx) * ty +
+        v11 * tx * ty
+      out[y * nw + x] = v >= 0.5 ? 255 : 0
+    }
+  }
+  return { mask: out, w: nw, h: nh }
+}
+
+function maskToSvg(
+  mask: Uint8Array,
+  w: number,
+  h: number,
+  invert: boolean,
+): { svg: string; pathCount: number } {
+  // 3× upsample → soften → contour → scale coords back. Yields sub-pixel
+  // Bézier paths instead of tracing the 1px raster lattice.
+  const factor = 3
+  const up = upsampleMask(mask, w, h, factor)
+  const soft = softenMaskStairs(up.mask, up.w, up.h, 3)
+  const labels = new Uint16Array(up.w * up.h)
+  for (let i = 0; i < up.w * up.h; i++) labels[i] = soft[i] ? 0 : 0xffff
+  const minArea = Math.max(8, Math.round((up.w * up.h) / 180000))
+  const contours = extractColorContours(labels, up.w, up.h, minArea)
+  const fill = invert ? '#ffffff' : '#120e0c'
+  const parts: string[] = [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">`,
+    '<g id="outline" fill-rule="evenodd">',
+  ]
+  let pathCount = 0
+  for (const components of contours.values()) {
+    for (const rings of components) {
+      const processed = rings
+        .map((ring) => processOutlineContour(ring, factor))
+        .filter((ring) => ring.length >= 3)
+      if (!processed.length) continue
+      // High corner angle → nearly all cubic; only knife-sharp bends stay L.
+      const d = ringsToSvgD(processed, true, 105)
+      if (!d) continue
+      parts.push(`<path fill="${fill}" stroke="none" d="${d}" />`)
+      pathCount++
+    }
+  }
+  parts.push('</g></svg>')
+  return { svg: parts.join('\n'), pathCount }
+}
+
+async function maskToOutlineResult(
   canvas: HTMLCanvasElement,
   ctx: CanvasRenderingContext2D,
   mask: Uint8Array,
@@ -75,11 +207,15 @@ function maskToOutlineResult(
   h: number,
   invert: boolean,
 ): Promise<OutlineResult> {
+  const { svg, pathCount } = maskToSvg(mask, w, h, invert)
+  const svgBlob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' })
+  const svgUrl = URL.createObjectURL(svgBlob)
+
+  // Raster PNG from the same mask (download fallback / quick thumb).
   const out = ctx.createImageData(w, h)
   const stroke: Rgb = invert
     ? { r: 255, g: 255, b: 255 }
     : { r: 18, g: 16, b: 14 }
-
   for (let i = 0; i < w * h; i++) {
     const o = i * 4
     if (mask[i]) {
@@ -94,48 +230,47 @@ function maskToOutlineResult(
       out.data[o + 3] = 0
     }
   }
-
   ctx.clearRect(0, 0, w, h)
   ctx.putImageData(out, 0, 0)
 
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (b) => {
-        if (!b) {
-          reject(new Error('Failed to encode outline PNG'))
-          return
-        }
-        resolve({
-          pngBlob: b,
-          pngUrl: URL.createObjectURL(b),
-          widthPx: w,
-          heightPx: h,
-        })
-      },
-      'image/png',
-    )
+  const pngBlob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((b) => {
+      if (!b) reject(new Error('Failed to encode outline PNG'))
+      else resolve(b)
+    }, 'image/png')
   })
+
+  return {
+    svg,
+    svgBlob,
+    svgUrl,
+    pngBlob,
+    pngUrl: URL.createObjectURL(pngBlob),
+    widthPx: w,
+    heightPx: h,
+    pathCount,
+  }
 }
 
 /**
- * Outline PNG:
+ * Outline (vector SVG + PNG):
  * - Line art → keep the ink itself (no boundary-around-strokes noise)
  * - Color art → posterize → single-pixel die-lines between fills
+ * Paths are cubic-smoothed — not pixel stairs.
  */
 export async function extractOutlinePng(
   source: HTMLImageElement | ImageBitmap,
   settings: OutlineSettings,
 ): Promise<OutlineResult> {
-  // Probe at working size with smoothing off first for line-art detection
   const probe = drawScaled(source, settings.maxDim, false)
   const probeData = probe.ctx.getImageData(0, 0, probe.w, probe.h)
-  // Detect BEFORE knocking out paper (transparent-as-light also covers post-knockout).
   const analysis = analyzeLineArt(probeData)
   knockOutLightBackground(probeData)
   probe.ctx.putImageData(probeData, 0, 0)
 
   if (analysis.isLineArt) {
-    const ink = extractInkMask(probeData, settings.sensitivity)
+    // No morph-close — dense hatching must stay as open stroke channels.
+    const ink = extractInkMask(probeData, settings.sensitivity, 'none')
     const mask = inkPreserved(ink.mask, ink.width, ink.height, settings.thickness)
     return maskToOutlineResult(
       probe.canvas,
@@ -147,28 +282,10 @@ export async function extractOutlinePng(
     )
   }
 
-  // Color / enamel artwork path
   const { canvas, ctx, w, h } = drawScaled(source, settings.maxDim, true)
   const imageData = ctx.getImageData(0, 0, w, h)
   knockOutLightBackground(imageData)
-
-  // Also clear solid black mockup backdrops so the outer die-line hugs the pin.
-  {
-    const { data, width, height } = imageData
-    const corners = [0, (width - 1) * 4, (height - 1) * width * 4, ((height - 1) * width + width - 1) * 4]
-    let blackCorners = 0
-    for (const o of corners) {
-      if (data[o + 3] < 16) continue
-      if (data[o] < 18 && data[o + 1] < 18 && data[o + 2] < 18) blackCorners++
-    }
-    if (blackCorners >= 2) {
-      for (let i = 0; i < width * height; i++) {
-        const o = i * 4
-        if (data[o + 3] < 16) continue
-        if (data[o] < 14 && data[o + 1] < 14 && data[o + 2] < 14) data[o + 3] = 0
-      }
-    }
-  }
+  knockOutNearBlackBackdrop(imageData)
 
   const colors = colorCountFromSensitivity(settings.sensitivity)
   const palette = extractPalette(imageData, colors, 2)
@@ -190,7 +307,6 @@ export async function extractOutlinePng(
   return maskToOutlineResult(canvas, ctx, mask, w, h, settings.invert)
 }
 
-/** Treat very light backdrop as transparent so the outer die-line hugs the pin. */
 function knockOutLightBackground(imageData: ImageData) {
   const { data, width, height } = imageData
   const corners = [
@@ -218,11 +334,32 @@ function knockOutLightBackground(imageData: ImageData) {
   }
 }
 
+function knockOutNearBlackBackdrop(imageData: ImageData) {
+  const { data, width, height } = imageData
+  const corners = [
+    0,
+    (width - 1) * 4,
+    (height - 1) * width * 4,
+    ((height - 1) * width + width - 1) * 4,
+  ]
+  let blackCorners = 0
+  for (const o of corners) {
+    if (data[o + 3] < 16) continue
+    if (data[o] < 18 && data[o + 1] < 18 && data[o + 2] < 18) blackCorners++
+  }
+  if (blackCorners < 2) return
+
+  for (let i = 0; i < width * height; i++) {
+    const o = i * 4
+    if (data[o + 3] < 16) continue
+    if (data[o] < 14 && data[o + 1] < 14 && data[o + 2] < 14) data[o + 3] = 0
+  }
+}
+
 /**
  * True single-pixel die-lines.
- * - Opaque↔opaque: mark only on the left/top side of the seam (right/down check)
- *   so we never double-stroke.
- * - Opaque↔empty: also mark left/top silhouette edges (otherwise those sides vanish).
+ * - Opaque↔opaque: mark only on the left/top side of the seam
+ * - Opaque↔empty: also mark left/top silhouette edges
  */
 function singlePixelBoundaryMask(labels: Uint16Array, w: number, h: number): Uint8Array {
   const mask = new Uint8Array(w * h)
@@ -249,7 +386,6 @@ function singlePixelBoundaryMask(labels: Uint16Array, w: number, h: number): Uin
   return mask
 }
 
-/** Keep only stroke components with enough pixels (drops freckle noise). */
 function keepLargeComponents(
   mask: Uint8Array,
   w: number,
