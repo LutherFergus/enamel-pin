@@ -5,17 +5,6 @@
 
 export type Point = { x: number; y: number }
 
-const NEIGHBORS: Point[] = [
-  { x: 1, y: 0 },
-  { x: 1, y: 1 },
-  { x: 0, y: 1 },
-  { x: -1, y: 1 },
-  { x: -1, y: 0 },
-  { x: -1, y: -1 },
-  { x: 0, y: -1 },
-  { x: 1, y: -1 },
-]
-
 function inBounds(x: number, y: number, w: number, h: number): boolean {
   return x >= 0 && y >= 0 && x < w && y < h
 }
@@ -33,79 +22,18 @@ function isForeground(
 }
 
 /**
- * Trace outer contour of a connected region starting at a boundary pixel.
- * Uses Moore neighborhood (clockwise).
- */
-function traceContour(
-  labels: Uint16Array,
-  width: number,
-  height: number,
-  startX: number,
-  startY: number,
-  colorIndex: number,
-  visitedEdge: Uint8Array,
-): Point[] | null {
-  const startIdx = startY * width + startX
-  if (visitedEdge[startIdx]) return null
-
-  const path: Point[] = []
-  let x = startX
-  let y = startY
-  // Entered from the left — start looking from north-west relative to entry
-  let dir = 0 // index into NEIGHBORS: facing right initially after finding left border
-
-  // Find initial direction: we were scanning L→R, so backtrack from west
-  for (let d = 0; d < 8; d++) {
-    const nx = x + NEIGHBORS[d].x
-    const ny = y + NEIGHBORS[d].y
-    if (!isForeground(labels, width, height, nx, ny, colorIndex)) {
-      dir = (d + 1) % 8
-      break
-    }
-  }
-
-  const maxSteps = width * height * 2
-  let steps = 0
-
-  do {
-    path.push({ x: x + 0.5, y: y + 0.5 })
-    visitedEdge[y * width + x] = 1
-
-    // Look for next boundary pixel starting from dir-1 (backtrack one)
-    let found = false
-    const startDir = (dir + 6) % 8 // turn left relative to previous move
-    for (let i = 0; i < 8; i++) {
-      const d = (startDir + i) % 8
-      const nx = x + NEIGHBORS[d].x
-      const ny = y + NEIGHBORS[d].y
-      if (isForeground(labels, width, height, nx, ny, colorIndex)) {
-        x = nx
-        y = ny
-        dir = d
-        found = true
-        break
-      }
-    }
-    if (!found) break
-    steps++
-  } while ((x !== startX || y !== startY) && steps < maxSteps)
-
-  if (path.length < 3) return null
-  return path
-}
-
-/**
- * Extract simplified outer contours for each color index present.
- * One contour per connected component (outer only for MVP fills).
+ * Extract outer contours for each color's connected components.
+ * Uses pixel-edge chaining (robust) instead of Moore walks that can collapse
+ * large enamel fills into tiny speck paths.
  */
 export function extractColorContours(
   labels: Uint16Array,
   width: number,
   height: number,
+  minArea = 24,
 ): Map<number, Point[][]> {
   const contoursByColor = new Map<number, Point[][]>()
   const visited = new Uint8Array(width * height)
-  const colorVisited = new Map<number, Uint8Array>()
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -113,7 +41,6 @@ export function extractColorContours(
       const color = labels[i]
       if (color === 0xffff || visited[i]) continue
 
-      // Flood to mark connected component, collect boundary starts
       const stack = [i]
       visited[i] = 1
       const component: number[] = []
@@ -138,50 +65,10 @@ export function extractColorContours(
         }
       }
 
-      // Find leftmost-topmost pixel that has a non-color neighbor (boundary)
-      let startX = -1
-      let startY = -1
-      let best = Infinity
-      for (const p of component) {
-        const px = p % width
-        const py = (p / width) | 0
-        const key = py * width + px
-        let boundary = false
-        for (const [dx, dy] of [
-          [1, 0],
-          [-1, 0],
-          [0, 1],
-          [0, -1],
-        ] as const) {
-          if (!isForeground(labels, width, height, px + dx, py + dy, color)) {
-            boundary = true
-            break
-          }
-        }
-        if (!boundary) continue
-        if (key < best) {
-          best = key
-          startX = px
-          startY = py
-        }
-      }
+      if (component.length < minArea) continue
 
-      if (startX < 0) continue
-
-      if (!colorVisited.has(color)) {
-        colorVisited.set(color, new Uint8Array(width * height))
-      }
-      const edgeVisited = colorVisited.get(color)!
-      const contour = traceContour(
-        labels,
-        width,
-        height,
-        startX,
-        startY,
-        color,
-        edgeVisited,
-      )
-      if (!contour) continue
+      const contour = contourFromComponent(component, labels, width, height, color)
+      if (!contour || contour.length < 3) continue
 
       const list = contoursByColor.get(color) ?? []
       list.push(contour)
@@ -190,6 +77,88 @@ export function extractColorContours(
   }
 
   return contoursByColor
+}
+
+/**
+ * Build the outer ring by chaining unit edges around a filled component.
+ * Coordinates are pixel corners (integer), then shifted to centers for SVG.
+ */
+function contourFromComponent(
+  component: number[],
+  labels: Uint16Array,
+  width: number,
+  height: number,
+  color: number,
+): Point[] | null {
+  // Directed edges keyed by "x1,y1" → list of "x2,y2"
+  const outs = new Map<string, string[]>()
+  const addEdge = (x1: number, y1: number, x2: number, y2: number) => {
+    const a = `${x1},${y1}`
+    const b = `${x2},${y2}`
+    const list = outs.get(a)
+    if (list) list.push(b)
+    else outs.set(a, [b])
+  }
+
+  for (const p of component) {
+    const x = p % width
+    const y = (p / width) | 0
+    // Top edge (left → right) if above is empty
+    if (!isForeground(labels, width, height, x, y - 1, color)) {
+      addEdge(x, y, x + 1, y)
+    }
+    // Right edge (top → bottom) if right is empty
+    if (!isForeground(labels, width, height, x + 1, y, color)) {
+      addEdge(x + 1, y, x + 1, y + 1)
+    }
+    // Bottom edge (right → left) if below is empty
+    if (!isForeground(labels, width, height, x, y + 1, color)) {
+      addEdge(x + 1, y + 1, x, y + 1)
+    }
+    // Left edge (bottom → top) if left is empty
+    if (!isForeground(labels, width, height, x - 1, y, color)) {
+      addEdge(x, y + 1, x, y)
+    }
+  }
+
+  if (outs.size === 0) return null
+
+  // Prefer the longest loop (outer boundary vs holes)
+  let best: Point[] | null = null
+
+  const unused = new Map<string, string[]>()
+  for (const [k, v] of outs) unused.set(k, [...v])
+
+  while (unused.size) {
+    const start = unused.keys().next().value as string
+    const ring: Point[] = []
+    let cur = start
+    let guard = 0
+    const maxGuard = width * height * 4
+
+    while (guard++ < maxGuard) {
+      const [sx, sy] = cur.split(',').map(Number)
+      ring.push({ x: sx, y: sy })
+      const nexts = unused.get(cur)
+      if (!nexts || nexts.length === 0) {
+        unused.delete(cur)
+        break
+      }
+      const next = nexts.pop()!
+      if (nexts.length === 0) unused.delete(cur)
+      cur = next
+      if (cur === start) break
+    }
+
+    if (ring.length >= 3 && (!best || ring.length > best.length)) {
+      best = ring
+    }
+  }
+
+  if (!best) return null
+
+  // Convert corner coords to a stable path; keep as corner grid (crisper fills)
+  return best
 }
 
 /** Ramer–Douglas–Peucker simplification. */

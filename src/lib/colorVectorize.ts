@@ -212,8 +212,9 @@ function stateToSvg(
   widthPx: number,
   heightPx: number,
   smoothness: number,
+  minArea: number,
 ): { svg: string; regionCount: number } {
-  const contoursByColor = extractColorContours(labels, widthPx, heightPx)
+  const contoursByColor = extractColorContours(labels, widthPx, heightPx, minArea)
   const { regions } = labelRegions(labels, widthPx, heightPx)
 
   const legend = [...metaByIndex.values()]
@@ -231,20 +232,23 @@ function stateToSvg(
     '<g id="fills">',
   ]
 
+  let drawn = 0
   for (const [colorIndex, contours] of contoursByColor) {
     const fill = rgbToHex(fillRgb[colorIndex])
     const meta = metaByIndex.get(colorIndex)
     const pmsAttr = meta?.pmsCode ? ` data-pms="${meta.pmsCode}"` : ''
     for (const contour of contours) {
       const pts = processContour(contour, smoothness)
+      if (pts.length < 3) continue
       const d = pathToSvgD(pts)
       if (!d) continue
       parts.push(`<path fill="${fill}" stroke="none"${pmsAttr} d="${d}" />`)
+      drawn++
     }
   }
   parts.push('</g></svg>')
 
-  return { svg: parts.join('\n'), regionCount: regions.length }
+  return { svg: parts.join('\n'), regionCount: drawn || regions.length }
 }
 
 async function packResult(
@@ -277,6 +281,7 @@ function assemble(
   snapToPms: boolean,
   overrides: PmsOverrides,
   state: ColorVectorState,
+  minArea = 24,
 ): Promise<ColorVectorResult> {
   const used = new Set<number>()
   for (let i = 0; i < labels.length; i++) {
@@ -297,6 +302,7 @@ function assemble(
     widthPx,
     heightPx,
     smoothness,
+    minArea,
   )
   return packResult(svg, widthPx, heightPx, meta, regionCount, state)
 }
@@ -314,13 +320,15 @@ export async function vectorizeColors(
   const { width, height } = imageData
   const palette = extractPalette(imageData, settings.colorCount)
   let labels = quantizeImage(imageData, palette)
-  labels = denoiseLabels(labels, width, height, 2)
+  // Extra denoise so enamel fills don't inherit photo/AI grit as speck regions
+  labels = denoiseLabels(labels, width, height, 4)
 
   const minArea = Math.max(
-    8,
+    24,
     Math.round(width * height * settings.minRegionRatio),
   )
   labels = mergeSmallRegions(labels, width, height, minArea)
+  labels = denoiseLabels(labels, width, height, 1)
 
   const mergeMap = buildMergeMap(palette.length, merges)
   const mergedLabels = applyMergeMap(labels, mergeMap)
@@ -341,6 +349,7 @@ export async function vectorizeColors(
       palette,
       mergeMap,
     },
+    minArea,
   )
 }
 
