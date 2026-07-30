@@ -169,6 +169,8 @@ function imageGenProxy(): Plugin {
 }
 
 export default defineConfig({
+  // GitHub Pages project site: https://lutherfergus.github.io/mosaic-image-creator/
+  base: process.env.GITHUB_PAGES === '1' ? '/mosaic-image-creator/' : '/',
   plugins: [react(), imageGenProxy()],
   server: {
     host: true,
