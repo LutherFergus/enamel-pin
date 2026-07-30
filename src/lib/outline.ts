@@ -139,6 +139,13 @@ export async function extractOutlinePng(
     if (boundary[i]) mask[i] = 255
   }
 
+  // Outer die-line: stroke where opaque artwork meets transparency
+  // (Sobel alone is weak on light fills against a clear backdrop).
+  const silhouette = alphaSilhouetteMask(alpha, w, h)
+  for (let i = 0; i < w * h; i++) {
+    if (silhouette[i]) mask[i] = 255
+  }
+
   const thickness = Math.max(1, Math.min(6, Math.round(settings.thickness)))
   if (thickness > 1) {
     mask = dilate(mask, w, h, thickness - 1)
@@ -237,6 +244,30 @@ function dilate(mask: Uint8Array, w: number, h: number, radius: number): Uint8Ar
           out[ny * w + nx] = 255
         }
       }
+    }
+  }
+  return out
+}
+
+/** Mark opaque pixels that touch transparent / out-of-bounds neighbors. */
+function alphaSilhouetteMask(alpha: Uint8Array, w: number, h: number): Uint8Array {
+  const out = new Uint8Array(w * h)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x
+      if (alpha[i] < 16) continue
+      let edge = x === 0 || y === 0 || x === w - 1 || y === h - 1
+      if (!edge) {
+        if (
+          alpha[i - 1] < 16 ||
+          alpha[i + 1] < 16 ||
+          alpha[i - w] < 16 ||
+          alpha[i + w] < 16
+        ) {
+          edge = true
+        }
+      }
+      if (edge) out[i] = 1
     }
   }
   return out
