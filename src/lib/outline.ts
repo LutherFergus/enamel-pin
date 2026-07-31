@@ -79,31 +79,37 @@ export async function extractOutlinePng(
 
   knockOutSolidBackground(imageData)
 
-  const { mask: rawMask, lineArt } = extractInkMask(imageData, settings.sensitivity)
+  const { mask: rawMask, lineArt, avgChroma } = extractInkMask(
+    imageData,
+    settings.sensitivity,
+  )
   let mask = rawMask
 
   // Pure B&W bitmaps are already clean die-lines — skip speck stripping so
   // every polka hole / micro stroke from the source reaches Potrace.
   const pureBinary = isPureBinaryBitmap(imageData)
+  // Color illustrations (navy hair, red dress) often still pass the lineArt
+  // bimodal test because of large white areas — force wall extraction whenever
+  // there's meaningful chroma so solid fills become outer die-lines.
+  const treatAsColorArt = !lineArt || avgChroma >= 14
 
   if (!pureBinary) {
     // Drop tiny speck components (noise left of silhouettes, texture grit).
     // Line art keeps flecks — polka rim ticks are often only a few pixels.
-    const minSpeck = lineArt
+    const minSpeck = !treatAsColorArt
       ? Math.max(2, Math.round(w * h * 0.000002))
       : Math.max(12, Math.round(w * h * 0.00004))
     mask = removeSmallComponents(mask, w, h, minSpeck)
   }
 
-  if (lineArt) {
-    // Vectorizer / imaengine-style B&W: never fill white islands (polka, spokes).
+  if (!treatAsColorArt) {
+    // True B&W Vectorizer / imaengine line art: keep fills + white islands.
     if (!pureBinary) {
-      // Only strip true 1-neighbor grit so 2-px micro-strokes around dots survive.
       mask = removeIsolatedInk(mask, w, h, 1)
     }
   } else {
-    // Color pin art: hollow solid black fills into metal walls, but KEEP rings
-    // around internal white islands (polka dots). Never majority-fill holes.
+    // Color art: hollow solid dark fills (hair, deep reds) into metal walls so
+    // the outline plate traces the silhouette instead of skipping chromatic darks.
     mask = toStrokeWallsPreserveHoles(mask, w, h, 1)
     mask = removeIsolatedInk(mask, w, h, 2)
     mask = removeSmallComponents(mask, w, h, Math.max(4, Math.round(w * h * 0.00001)))
@@ -114,7 +120,7 @@ export async function extractOutlinePng(
   const thickness = Math.max(0.1, Math.min(6, settings.thickness))
   if (thickness >= 0.15) {
     mask = dilate(mask, w, h, thickness)
-  } else if (!lineArt) {
+  } else if (treatAsColorArt) {
     mask = dilate(mask, w, h, 1)
   }
 
@@ -345,7 +351,7 @@ function restylePotraceSvg(
 function extractInkMask(
   imageData: ImageData,
   sensitivity: number,
-): { mask: Uint8Array; lineArt: boolean } {
+): { mask: Uint8Array; lineArt: boolean; avgChroma: number } {
   const { data, width, height } = imageData
   const n = width * height
   const lum = new Float32Array(n)
@@ -420,23 +426,31 @@ function extractInkMask(
         }
         const contrast = maxN - L
 
-        const nearBlack = L <= inkCeil * 0.55 && chromaAt(data, o) < 35
+        const ch = chromaAt(data, o)
+        const nearBlack = L <= inkCeil * 0.55 && ch < 35
         const darkEdge = L <= inkCeil && contrast >= contrastMin
         const strongInk = L <= 22
         // Pure line-art: any sufficiently dark low-chroma pixel is ink.
-        const lineInk = lineArt && L <= inkCeil && chromaAt(data, o) < 40
+        const lineInk = lineArt && L <= inkCeil && ch < 40
+        // Navy hair / deep reds: dark enough but high chroma — must not be
+        // dropped by the nearBlack chroma gate or hair loses its silhouette.
+        const darkChromaticFill = L <= 55 + t * 50 && ch >= 16
 
-        if (nearBlack || darkEdge || strongInk || lineInk) mask[i] = 255
+        if (nearBlack || darkEdge || strongInk || lineInk || darkChromaticFill) {
+          mask[i] = 255
+        }
       }
     }
   }
 
-  // Outer die edge for product photos; skip on line art (would fatten every stroke).
-  if (!lineArt) {
-    addSilhouetteRing(mask, data, width, height)
+  // Outer die edge for product photos / color art against white paper.
+  // Skip only on true low-chroma line art (would fatten every hatch).
+  if (!lineArt || avgChroma >= 14) {
+    addSilhouetteRing(mask, data, lum, width, height)
+    addDarkOnLightContours(mask, data, lum, width, height, 55 + t * 50)
   }
 
-  return { mask, lineArt }
+  return { mask, lineArt, avgChroma }
 }
 
 function chromaAt(data: Uint8ClampedArray, o: number): number {
@@ -462,6 +476,7 @@ function isPureBinaryBitmap(imageData: ImageData): boolean {
 function addSilhouetteRing(
   mask: Uint8Array,
   data: Uint8ClampedArray,
+  lum: Float32Array,
   w: number,
   h: number,
 ) {
@@ -470,6 +485,8 @@ function addSilhouetteRing(
       const i = y * w + x
       const o = i * 4
       if (data[o + 3] < 128) continue
+      // Only ring subject pixels that are not already near-white.
+      if (lum[i] > 210) continue
       let border = false
       for (const [dx, dy] of [
         [1, 0],
@@ -477,13 +494,58 @@ function addSilhouetteRing(
         [0, 1],
         [0, -1],
       ] as const) {
-        const no = ((y + dy) * w + (x + dx)) * 4
-        if (data[no + 3] < 128) {
+        const ni = (y + dy) * w + (x + dx)
+        const no = ni * 4
+        // Transparent knockout OR light background / paper.
+        if (data[no + 3] < 128 || lum[ni] >= 225) {
           border = true
           break
         }
       }
       if (border) mask[i] = 255
+    }
+  }
+}
+
+/**
+ * Trace the outer edge of dark fills (navy hair, deep shadows) where they meet
+ * lighter neighbors — closes silhouette gaps the ink-only path misses.
+ */
+function addDarkOnLightContours(
+  mask: Uint8Array,
+  data: Uint8ClampedArray,
+  lum: Float32Array,
+  w: number,
+  h: number,
+  darkCeil: number,
+) {
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x
+      const o = i * 4
+      if (data[o + 3] < 128) continue
+      if (lum[i] > darkCeil) continue
+      for (const [dx, dy] of [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+        [1, 1],
+        [-1, 1],
+        [1, -1],
+        [-1, -1],
+      ] as const) {
+        const ni = (y + dy) * w + (x + dx)
+        const no = ni * 4
+        const lightNeighbor =
+          data[no + 3] < 128 ||
+          lum[ni] >= 200 ||
+          lum[ni] - lum[i] >= 45
+        if (lightNeighbor) {
+          mask[i] = 255
+          break
+        }
+      }
     }
   }
 }
