@@ -1,3 +1,4 @@
+import { init as initPotrace, potrace } from 'esm-potrace-wasm'
 import ImageTracer from 'imagetracerjs'
 import type { PaletteColor, Rgb } from './types'
 import { rgbToHex } from './types'
@@ -25,6 +26,13 @@ type TracerPath = {
   isholepath?: boolean
   segments: Seg[]
   holechildren?: number[]
+}
+
+let potraceReady: Promise<void> | null = null
+
+function ensurePotrace(): Promise<void> {
+  if (!potraceReady) potraceReady = initPotrace()
+  return potraceReady
 }
 
 /**
@@ -172,6 +180,166 @@ export function labelsToSmoothSvg(
 
   parts.push('</g></svg>')
   return { svg: parts.join('\n'), pathCount: pending.length }
+}
+
+/**
+ * Potrace each flat color into smooth cubic Beziers — used for Final / Clean up
+ * so enamel edges read as crisp curves instead of ImageTracer stair-waves.
+ */
+export async function labelsToCrispSvg(
+  labels: Uint16Array,
+  fillRgb: Rgb[],
+  metaByIndex: Map<number, PaletteColor>,
+  opts: { widthPx: number; heightPx: number },
+): Promise<{ svg: string; pathCount: number }> {
+  await ensurePotrace()
+  const { widthPx: w, heightPx: h } = opts
+  const n = w * h
+
+  const used = new Set<number>()
+  for (let i = 0; i < n; i++) {
+    const v = labels[i]
+    if (v !== 0xffff && v < fillRgb.length) used.add(v)
+  }
+
+  const legend = [...metaByIndex.values()]
+    .map(
+      (c) =>
+        `  ${c.pmsName ?? c.hex} → ${c.hex}${
+          c.pmsDeltaE != null ? ` (ΔE ${c.pmsDeltaE})` : ''
+        }`,
+    )
+    .join('\n')
+
+  const parts: string[] = [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" shape-rendering="geometricPrecision">`,
+    `<!-- crisp enamel fills · Potrace curves · PMS Solid Coated\n${legend}\n-->`,
+    '<g id="fills">',
+  ]
+
+  type Pending = { markup: string; area: number }
+  const pending: Pending[] = []
+  const turdsize = Math.max(4, Math.round(w * h * 0.000012))
+
+  for (const idx of [...used].sort((a, b) => a - b)) {
+    const c = fillRgb[idx]
+    if (!c) continue
+    const fill = rgbToHex(c)
+    const meta = metaByIndex.get(idx)
+    const pmsAttr = meta?.pmsCode ? ` data-pms="${meta.pmsCode}"` : ''
+
+    // 2× supersample so Potrace fits curves to sub-pixel stairs.
+    const scale = 2
+    const tw = w * scale
+    const th = h * scale
+    const bw = new ImageData(tw, th)
+    for (let y = 0; y < th; y++) {
+      const sy = (y / scale) | 0
+      for (let x = 0; x < tw; x++) {
+        const sx = (x / scale) | 0
+        const on = labels[sy * w + sx] === idx
+        const o = (y * tw + x) * 4
+        const v = on ? 0 : 255
+        bw.data[o] = v
+        bw.data[o + 1] = v
+        bw.data[o + 2] = v
+        bw.data[o + 3] = 255
+      }
+    }
+
+    const traced = await potrace(bw, {
+      turdsize: turdsize * scale * scale,
+      turnpolicy: 4,
+      // Round corners aggressively for soft-enamel look.
+      alphamax: 1.0,
+      opticurve: 1,
+      // Merge more segments → fewer nodes, smoother arcs.
+      opttolerance: 0.4,
+      pathonly: false,
+      extractcolors: false,
+    })
+
+    const inner = extractPotracePaths(String(traced), fill, pmsAttr, 1 / scale)
+    if (inner.markup) {
+      pending.push({ markup: inner.markup, area: inner.area })
+    }
+  }
+
+  pending.sort((a, b) => b.area - a.area)
+  for (const p of pending) parts.push(p.markup)
+
+  parts.push('</g></svg>')
+  return { svg: parts.join('\n'), pathCount: pending.length }
+}
+
+/**
+ * Pull <path> elements from a Potrace SVG, recolor, and scale coordinates
+ * from supersampled space back to art pixels.
+ */
+function extractPotracePaths(
+  svg: string,
+  fill: string,
+  pmsAttr: string,
+  coordScale: number,
+): { markup: string; area: number } {
+  let s = svg
+    .replace(/<\?xml[^>]*>/i, '')
+    .replace(/<!DOCTYPE[^>]*>/i, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<rect\b[^>]*\/?>/gi, '')
+    .trim()
+
+  // Potrace wraps paths in a y-flip group: translate(0,H) scale(0.1,-0.1)
+  const gMatch = s.match(/<g\b([^>]*)>([\s\S]*)<\/g>/i)
+  const gAttrs = gMatch?.[1] ?? ''
+  let body = gMatch?.[2] ?? s
+
+  const transform = gAttrs.match(/transform="([^"]*)"/i)?.[1] ?? ''
+  // Scale the existing transform so supersampled coords map to art size.
+  const extra =
+    coordScale !== 1 ? ` scale(${coordScale})` : ''
+  const combinedTransform = `${transform}${extra}`.trim()
+
+  const paths = [...body.matchAll(/<path\b[^>]*>/gi)].map((m) => m[0])
+  if (!paths.length) return { markup: '', area: 0 }
+
+  const restyled = paths
+    .map((p) =>
+      p
+        .replace(/\sfill="[^"]*"/gi, '')
+        .replace(/\sstroke="[^"]*"/gi, '')
+        .replace(/\/?>$/, '')
+        .concat(
+          ` fill="${fill}" fill-rule="evenodd" stroke="${fill}" stroke-width="${(1.1 / Math.max(coordScale, 0.5)).toFixed(2)}" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke fill"${pmsAttr} />`,
+        ),
+    )
+    .join('\n')
+
+  // Rough area from path count × canvas — sort order still prefers earlier large colors via caller sort on this.
+  let area = 0
+  for (const m of body.matchAll(/\bd="([^"]*)"/gi)) {
+    const nums = m[1].match(/-?\d+\.?\d*/g)
+    if (!nums || nums.length < 4) continue
+    const xs: number[] = []
+    const ys: number[] = []
+    for (let i = 0; i + 1 < nums.length; i += 2) {
+      xs.push(Number(nums[i]))
+      ys.push(Number(nums[i + 1]))
+    }
+    if (!xs.length) continue
+    const minX = Math.min(...xs)
+    const maxX = Math.max(...xs)
+    const minY = Math.min(...ys)
+    const maxY = Math.max(...ys)
+    area += Math.max(0, maxX - minX) * Math.max(0, maxY - minY)
+  }
+  area *= coordScale * coordScale
+
+  const markup = combinedTransform
+    ? `<g transform="${combinedTransform}" fill="${fill}">${restyled}</g>`
+    : restyled
+
+  return { markup, area: area || paths.length }
 }
 
 function renderFlat(

@@ -9,7 +9,8 @@
 
 import type { OutlineResult } from './outline'
 import { composeProofSvg, type ProofSvg } from './proofSvg'
-import { labelsToSmoothSvg } from './traceSvg'
+import { dropSpeckIslands, smoothLabelBoundaries } from './labelSmooth'
+import { labelsToCrispSvg } from './traceSvg'
 import type { PaletteColor, Rgb } from './types'
 import { colorDistance, rgbToHex } from './types'
 
@@ -46,7 +47,7 @@ export async function cleanupProofDominantCells(
   outline: OutlineResult,
   opts: CleanupProofOptions,
 ): Promise<CleanupProofResult> {
-  const maxDim = Math.max(400, Math.min(1600, opts.maxDim ?? 1200))
+  const maxDim = Math.max(800, Math.min(1600, opts.maxDim ?? 1400))
   const [{ data, w, h }, inkNative] = await Promise.all([
     rasterizeSvg(proof.svg, maxDim),
     loadInkMaskFromOutline(outline),
@@ -62,15 +63,27 @@ export async function cleanupProofDominantCells(
   ink = closeMask(ink, w, h, 1.25)
 
   const palette = (opts.palette ?? []).filter((c) => c.enabled !== false)
-  const { cellLabels, fillRgb, metaByIndex, cellsFixed, cellCount } =
+  let { cellLabels, fillRgb, metaByIndex, cellsFixed, cellCount } =
     floodDominantInCells(data, ink, w, h, palette)
 
-  const { svg: fillSvg } = labelsToSmoothSvg(cellLabels, fillRgb, metaByIndex, {
-    smoothness: opts.smoothness,
-    widthPx: w,
-    heightPx: h,
-    pathomitScale: opts.pathomitScale ?? 1,
-  })
+  // Round pixel stairs before curve fitting.
+  cellLabels = smoothLabelBoundaries(cellLabels, w, h, 4)
+  cellLabels = dropSpeckIslands(
+    cellLabels,
+    w,
+    h,
+    Math.max(10, Math.round(w * h * 0.00002)),
+  )
+  cellLabels = smoothLabelBoundaries(cellLabels, w, h, 2)
+
+  // Potrace cubics — crisp enamel curves (not ImageTracer stair-waves).
+  const { svg: fillSvg, pathCount } = await labelsToCrispSvg(
+    cellLabels,
+    fillRgb,
+    metaByIndex,
+    { widthPx: w, heightPx: h },
+  )
+  cellCount = Math.max(cellCount, pathCount)
 
   const nextProof = composeProofSvg(fillSvg, outline.svg)
   const vectorBlob = new Blob([fillSvg], { type: 'image/svg+xml;charset=utf-8' })
