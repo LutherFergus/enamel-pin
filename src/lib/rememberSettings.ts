@@ -80,6 +80,12 @@ export function sanitizeSettings(raw: unknown): DualOutputSettings {
     if (typeof o.vector.snapToPms === 'boolean') {
       base.vector.snapToPms = o.vector.snapToPms
     }
+    if (isFiniteNumber(o.vector.pmsTolerance)) {
+      base.vector.pmsTolerance = Math.max(
+        0,
+        Math.min(30, Math.round(o.vector.pmsTolerance)),
+      )
+    }
   }
 
   return base

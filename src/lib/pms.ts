@@ -107,10 +107,17 @@ export function nearestPms(rgb: Rgb, chart = getPmsChart()): PmsMatch {
  */
 export function snapPaletteToPms(
   palette: Rgb[],
-  opts: { unique?: boolean; areas?: number[]; maxDeltaE?: number } = {},
+  opts: {
+    unique?: boolean
+    areas?: number[]
+    maxDeltaE?: number
+    /** When > 0, near-matches may reuse an already-assigned PMS code. */
+    shareWithinDeltaE?: number
+  } = {},
 ): Array<{ rgb: Rgb; match: PmsMatch }> {
   const unique = opts.unique ?? true
   const maxDeltaE = opts.maxDeltaE ?? 22
+  const shareWithin = Math.max(0, opts.shareWithinDeltaE ?? 0)
   const chart = getPmsChart()
   const used = new Set<string>()
   const out: Array<{ rgb: Rgb; match: PmsMatch } | null> = Array.from(
@@ -132,14 +139,23 @@ export function snapPaletteToPms(
 
     let chosen = ranked[0]
     if (unique) {
-      const free = ranked.find((m) => !used.has(m.pms.code))
-      if (free) {
-        // Don't mute a vivid primary just to satisfy uniqueness.
-        if (free.deltaE <= maxDeltaE || free.deltaE <= ranked[0].deltaE + 6) {
-          chosen = free
-        } else {
-          // Keep source RGB; metadata still points at true nearest PMS.
-          chosen = ranked[0]
+      // Share the true nearest swatch when it's already used and close enough.
+      if (
+        shareWithin > 0 &&
+        used.has(ranked[0].pms.code) &&
+        ranked[0].deltaE <= shareWithin
+      ) {
+        chosen = ranked[0]
+      } else {
+        const free = ranked.find((m) => !used.has(m.pms.code))
+        if (free) {
+          // Don't mute a vivid primary just to satisfy uniqueness.
+          if (free.deltaE <= maxDeltaE || free.deltaE <= ranked[0].deltaE + 6) {
+            chosen = free
+          } else {
+            // Keep source RGB; metadata still points at true nearest PMS.
+            chosen = ranked[0]
+          }
         }
       }
     }

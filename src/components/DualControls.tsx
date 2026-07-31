@@ -160,6 +160,27 @@ export function DualControls({
       </p>
       <div className="field">
         <label>
+          <span>PMS match tolerance</span>
+          <span className="value">ΔE {settings.vector.pmsTolerance}</span>
+        </label>
+        <input
+          type="range"
+          min={0}
+          max={30}
+          step={1}
+          value={settings.vector.pmsTolerance}
+          disabled={disabled}
+          onChange={(e) =>
+            patchVector({ pmsTolerance: Number(e.target.value) })
+          }
+        />
+      </div>
+      <p className="hint">
+        Higher combines near-matching fills (e.g. six near-blacks → one Black).
+        0 keeps every quantized shade distinct. Reprocess to apply.
+      </p>
+      <div className="field">
+        <label>
           <span>Smoothness</span>
           <span className="value">{settings.vector.smoothness}</span>
         </label>

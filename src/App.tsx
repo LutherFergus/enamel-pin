@@ -92,6 +92,7 @@ export default function App() {
           nextSettings.vector.snapToPms,
           nextOverrides,
           nextSettings.vector.detailRetention,
+          nextSettings.vector.pmsTolerance,
         )
         startTransition(() => {
           setResult((prev) => {
@@ -100,7 +101,6 @@ export default function App() {
             URL.revokeObjectURL(prev.vector.svgUrl)
             return next
           })
-          setViewMode('vector')
         })
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Palette update failed')
@@ -117,6 +117,7 @@ export default function App() {
       nextSettings: DualOutputSettings,
       nextMerges: Array<[number, number]>,
       nextOverrides: PmsOverrides,
+      opts: { preserveView?: boolean } = {},
     ) => {
       setBusy(true)
       setError(null)
@@ -133,7 +134,9 @@ export default function App() {
             revokeDualUrls(prev)
             return next
           })
-          setViewMode('proof')
+          if (!opts.preserveView) {
+            setViewMode('proof')
+          }
         })
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Processing failed')
@@ -192,7 +195,7 @@ export default function App() {
     if (!sourceImage) return
     setMerges([])
     setPmsOverrides({})
-    void runPipeline(sourceImage, settings, [], {})
+    void runPipeline(sourceImage, settings, [], {}, { preserveView: true })
   }, [runPipeline, settings, sourceImage])
 
   const onMergesChange = useCallback(

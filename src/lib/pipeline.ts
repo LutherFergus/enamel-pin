@@ -65,6 +65,7 @@ export async function remergeVector(
   snapToPms: boolean,
   overrides: PmsOverrides = {},
   detailRetention = DEFAULT_COLOR_VECTOR_SETTINGS.detailRetention,
+  pmsTolerance = DEFAULT_COLOR_VECTOR_SETTINGS.pmsTolerance,
 ): Promise<DualOutputResult> {
   const { pathomitScale } = detailRetentionParams(detailRetention)
   const vector = await applyPaletteMerges(
@@ -74,6 +75,7 @@ export async function remergeVector(
     snapToPms,
     overrides,
     pathomitScale,
+    pmsTolerance,
   )
   revokeProof(previous.proof)
   return {
