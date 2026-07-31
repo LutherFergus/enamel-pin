@@ -7,6 +7,8 @@ export type TraceOptions = {
   smoothness: number
   widthPx: number
   heightPx: number
+  /** Scales ImageTracer pathomit; lower keeps small islands (from detail retention). */
+  pathomitScale?: number
 }
 
 type Seg = {
@@ -43,6 +45,7 @@ export function labelsToSmoothSvg(
 ): { svg: string; pathCount: number } {
   const { widthPx: w, heightPx: h, smoothness } = opts
   const t = Math.max(0, Math.min(5, smoothness)) / 5
+  const pathomitScale = Math.max(0.25, Math.min(1.5, opts.pathomitScale ?? 1))
 
   // 2×–3× supersample: pixel stairs become sub-pixel to the fitter.
   const superScale = smoothness >= 4 ? 3 : smoothness >= 2 ? 2 : 1
@@ -60,7 +63,10 @@ export function labelsToSmoothSvg(
   // (Vectorizer.AI-style: geometry first, not edge-pixel fidelity.)
   const ltres = 1.2 + t * 7.5
   const qtres = 1.2 + t * 7.5
-  const pathomit = Math.round((8 + t * 28) * superScale)
+  const pathomit = Math.max(
+    2,
+    Math.round((8 + t * 28) * superScale * pathomitScale),
+  )
   const blurradius = t >= 0.35 ? Math.min(3, 1 + Math.round(t * 2)) : 0
 
   const traced = ImageTracer.imagedataToTracedata(imgd, {

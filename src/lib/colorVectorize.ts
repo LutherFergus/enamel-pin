@@ -9,7 +9,12 @@ import { colorDistance, rgbToHex } from './types'
 
 export type ColorVectorSettings = {
   colorCount: number
-  /** Relative min region size as fraction of image area (0.00005–0.01). */
+  /**
+   * Detail retention 0–100.
+   * Higher keeps small shapes, polka dots, engine fins; lower merges speckles.
+   */
+  detailRetention: number
+  /** @deprecated Derived from detailRetention when absent in older saves. */
   minRegionRatio: number
   smoothness: number
   maxDim: number
@@ -19,10 +24,25 @@ export type ColorVectorSettings = {
 
 export const DEFAULT_COLOR_VECTOR_SETTINGS: ColorVectorSettings = {
   colorCount: 12,
-  minRegionRatio: 0.0003,
+  detailRetention: 65,
+  // Kept in sync with detailRetentionParams(65) for older readers.
+  minRegionRatio: 0.0008,
   smoothness: 4,
   maxDim: 1000,
   snapToPms: true,
+}
+
+/** Map detail retention slider → cleanup / trace knobs. */
+export function detailRetentionParams(detailRetention: number) {
+  const t = Math.max(0, Math.min(100, detailRetention)) / 100
+  // High retention → tiny min regions; low → aggressive merge.
+  const minRegionRatio = 0.0022 * (1 - t) + 0.00005 * t
+  const denoisePasses = t >= 0.75 ? 1 : t >= 0.4 ? 2 : 3
+  const boundaryPasses = t >= 0.7 ? 1 : t >= 0.4 ? 2 : 3
+  const speckScale = 0.35 + (1 - t) * 0.85
+  // Tracer pathomit: lower keeps small islands (polka dots, fins).
+  const pathomitScale = 1.35 - t * 0.95
+  return { minRegionRatio, denoisePasses, boundaryPasses, speckScale, pathomitScale, t }
 }
 
 /** Manual per-slot PMS overrides: palette index → PMS code like "185 C". */
@@ -208,12 +228,14 @@ function stateToSvg(
   widthPx: number,
   heightPx: number,
   smoothness: number,
+  pathomitScale = 1,
 ): { svg: string; regionCount: number } {
   const { regions } = labelRegions(labels, widthPx, heightPx)
   const { svg, pathCount } = labelsToSmoothSvg(labels, fillRgb, metaByIndex, {
     smoothness,
     widthPx,
     heightPx,
+    pathomitScale,
   })
   return { svg, regionCount: Math.max(regions.length, pathCount) }
 }
@@ -248,6 +270,7 @@ function assemble(
   snapToPms: boolean,
   overrides: PmsOverrides,
   state: ColorVectorState,
+  pathomitScale = 1,
 ): Promise<ColorVectorResult> {
   const used = new Set<number>()
   for (let i = 0; i < labels.length; i++) {
@@ -270,6 +293,7 @@ function assemble(
     widthPx,
     heightPx,
     smoothness,
+    pathomitScale,
   )
   return packResult(svg, widthPx, heightPx, meta, regionCount, state)
 }
@@ -288,24 +312,27 @@ export async function vectorizeColors(
   // Product-photo backdrops must not become the "primary" palette color.
   removeBackground(imageData, background)
   const { width, height } = imageData
+  const detail = detailRetentionParams(settings.detailRetention)
   const palette = extractPalette(imageData, settings.colorCount)
   let labels = quantizeImage(imageData, palette)
-  labels = denoiseLabels(labels, width, height, 2)
+  labels = denoiseLabels(labels, width, height, detail.denoisePasses)
 
   const minArea = Math.max(
     8,
-    Math.round(width * height * settings.minRegionRatio),
+    Math.round(width * height * detail.minRegionRatio),
   )
   labels = mergeSmallRegions(labels, width, height, minArea)
   // Round off pixel stairs on region boundaries before spline fitting.
-  labels = smoothLabelBoundaries(labels, width, height, 3)
+  labels = smoothLabelBoundaries(labels, width, height, detail.boundaryPasses)
   labels = dropSpeckIslands(
     labels,
     width,
     height,
-    Math.max(12, Math.round(minArea * 0.75)),
+    Math.max(12, Math.round(minArea * detail.speckScale)),
   )
-  labels = smoothLabelBoundaries(labels, width, height, 1)
+  if (detail.boundaryPasses > 1) {
+    labels = smoothLabelBoundaries(labels, width, height, 1)
+  }
   // Overlap abutting fills so vector paths seal (no checkerboard hairlines).
   labels = overlapAdjacentFills(labels, width, height)
 
@@ -328,6 +355,7 @@ export async function vectorizeColors(
       palette,
       mergeMap,
     },
+    detail.pathomitScale,
   )
 }
 
@@ -340,6 +368,7 @@ export async function applyPaletteMerges(
   smoothness: number,
   snapToPms: boolean,
   overrides: PmsOverrides = {},
+  pathomitScale = 1,
 ): Promise<ColorVectorResult> {
   const mergeMap = buildMergeMap(state.palette.length, merges)
   const mergedLabels = applyMergeMap(state.labels, mergeMap)
@@ -353,6 +382,7 @@ export async function applyPaletteMerges(
     snapToPms,
     overrides,
     { ...state, mergeMap },
+    pathomitScale,
   )
 }
 

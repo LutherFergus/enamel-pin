@@ -1,6 +1,7 @@
 import {
   applyPaletteMerges,
   DEFAULT_COLOR_VECTOR_SETTINGS,
+  detailRetentionParams,
   vectorizeColors,
   type ColorVectorResult,
   type ColorVectorSettings,
@@ -63,13 +64,16 @@ export async function remergeVector(
   smoothness: number,
   snapToPms: boolean,
   overrides: PmsOverrides = {},
+  detailRetention = DEFAULT_COLOR_VECTOR_SETTINGS.detailRetention,
 ): Promise<DualOutputResult> {
+  const { pathomitScale } = detailRetentionParams(detailRetention)
   const vector = await applyPaletteMerges(
     previous.vector.state,
     merges,
     smoothness,
     snapToPms,
     overrides,
+    pathomitScale,
   )
   revokeProof(previous.proof)
   return {

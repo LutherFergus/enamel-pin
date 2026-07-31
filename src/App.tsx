@@ -91,6 +91,7 @@ export default function App() {
           nextSettings.vector.smoothness,
           nextSettings.vector.snapToPms,
           nextOverrides,
+          nextSettings.vector.detailRetention,
         )
         startTransition(() => {
           setResult((prev) => {

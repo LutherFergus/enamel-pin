@@ -178,24 +178,25 @@ export function DualControls({
       </p>
       <div className="field">
         <label>
-          <span>Detail cleanup</span>
-          <span className="value">
-            {(settings.vector.minRegionRatio * 10000).toFixed(1)}
-          </span>
+          <span>Detail retention</span>
+          <span className="value">{settings.vector.detailRetention}</span>
         </label>
         <input
           type="range"
-          min={1}
-          max={20}
+          min={0}
+          max={100}
           step={1}
-          value={Math.round(settings.vector.minRegionRatio * 10000)}
+          value={settings.vector.detailRetention}
           disabled={disabled}
           onChange={(e) =>
-            patchVector({ minRegionRatio: Number(e.target.value) / 10000 })
+            patchVector({ detailRetention: Number(e.target.value) })
           }
         />
       </div>
-      <p className="hint">Higher cleanup merges tiny speckles before tracing.</p>
+      <p className="hint">
+        Higher keeps small shapes (dots, fins, linework). Lower merges speckles
+        into larger flats. Reprocess to apply.
+      </p>
     </div>
   )
 }

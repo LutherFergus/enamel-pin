@@ -1,7 +1,17 @@
+import { detailRetentionParams } from './colorVectorize'
 import {
   DEFAULT_DUAL_SETTINGS,
   type DualOutputSettings,
 } from './pipeline'
+
+/** Invert detailRetentionParams minRegionRatio → 0–100 retention. */
+function retentionFromMinRegionRatio(minRegionRatio: number): number {
+  const lo = 0.00005
+  const hi = 0.0022
+  const clamped = Math.max(lo, Math.min(hi, minRegionRatio))
+  const t = (hi - clamped) / (hi - lo)
+  return Math.round(Math.max(0, Math.min(100, t * 100)))
+}
 
 const STORAGE_KEY = 'enamel-pin-creator.settings.v2'
 
@@ -46,9 +56,21 @@ export function sanitizeSettings(raw: unknown): DualOutputSettings {
     if (isFiniteNumber(o.vector.colorCount)) {
       base.vector.colorCount = Math.max(4, Math.min(32, Math.round(o.vector.colorCount)))
     }
-    if (isFiniteNumber(o.vector.minRegionRatio)) {
-      base.vector.minRegionRatio = Math.max(0.00005, Math.min(0.01, o.vector.minRegionRatio))
+    if (isFiniteNumber(o.vector.detailRetention)) {
+      base.vector.detailRetention = Math.max(
+        0,
+        Math.min(100, Math.round(o.vector.detailRetention)),
+      )
+    } else if (isFiniteNumber(o.vector.minRegionRatio)) {
+      // Migrate older "Detail cleanup" saves → retention slider.
+      base.vector.detailRetention = retentionFromMinRegionRatio(
+        o.vector.minRegionRatio,
+      )
     }
+    // Keep deprecated field synced for any leftover readers.
+    base.vector.minRegionRatio = detailRetentionParams(
+      base.vector.detailRetention,
+    ).minRegionRatio
     if (isFiniteNumber(o.vector.smoothness)) {
       base.vector.smoothness = Math.max(0, Math.min(5, Math.round(o.vector.smoothness)))
     }
