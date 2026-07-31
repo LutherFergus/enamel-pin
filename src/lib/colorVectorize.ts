@@ -242,6 +242,69 @@ function averageMergedPalette(palette: Rgb[], labels: Uint16Array, mergeMap: num
   })
 }
 
+/**
+ * Fold disabled palette roots into the nearest still-on root (Lab ΔE).
+ * Does not average colors — the target fill stays unchanged.
+ * Always keeps at least one on color (largest area if everything is off).
+ */
+export function remapDisabledColors(
+  labels: Uint16Array,
+  palette: Rgb[],
+  disabled: number[],
+): { labels: Uint16Array; disabledApplied: number[] } {
+  if (!disabled.length) {
+    return { labels, disabledApplied: [] }
+  }
+
+  const areas = countLabelUsage(labels, palette.length)
+  const used: number[] = []
+  for (let i = 0; i < palette.length; i++) {
+    if ((areas[i] ?? 0) > 0) used.push(i)
+  }
+  if (used.length === 0) {
+    return { labels, disabledApplied: [] }
+  }
+
+  const disabledSet = new Set(
+    disabled.filter((i) => i >= 0 && i < palette.length && used.includes(i)),
+  )
+  let enabled = used.filter((i) => !disabledSet.has(i))
+
+  if (enabled.length === 0) {
+    let best = used[0]
+    for (const i of used) {
+      if ((areas[i] ?? 0) > (areas[best] ?? 0)) best = i
+    }
+    disabledSet.delete(best)
+    enabled = [best]
+  }
+
+  if (disabledSet.size === 0) {
+    return { labels, disabledApplied: [] }
+  }
+
+  const labs = palette.map((c) => rgbToLab(c))
+  const remap = Array.from({ length: palette.length }, (_, i) => i)
+
+  for (const d of disabledSet) {
+    let best = enabled[0]
+    let bestDe = Infinity
+    for (const e of enabled) {
+      const de = deltaE76(labs[d], labs[e])
+      if (de < bestDe) {
+        bestDe = de
+        best = e
+      }
+    }
+    remap[d] = best
+  }
+
+  return {
+    labels: applyMergeMap(labels, remap),
+    disabledApplied: [...disabledSet].sort((a, b) => a - b),
+  }
+}
+
 function resolvePaletteColors(
   basePalette: Rgb[],
   usedIndices: number[],
@@ -368,24 +431,40 @@ function assemble(
   state: ColorVectorState,
   pathomitScale = 1,
   pmsTolerance = 0,
+  disabledColors: number[] = [],
 ): Promise<ColorVectorResult> {
-  const used = new Set<number>()
+  // Keep pre-disable roots in the UI palette so users can turn them back on.
+  const displayUsed = new Set<number>()
   for (let i = 0; i < labels.length; i++) {
-    if (labels[i] !== 0xffff) used.add(labels[i])
+    if (labels[i] !== 0xffff) displayUsed.add(labels[i])
   }
-  const usedIndices = [...used]
+  const displayIndices = [...displayUsed]
+
+  const { labels: finalLabels, disabledApplied } = remapDisabledColors(
+    labels,
+    basePalette,
+    disabledColors,
+  )
+
   const areas = countLabelUsage(labels, basePalette.length)
   const { fillRgb, meta } = resolvePaletteColors(
     basePalette,
-    usedIndices,
+    displayIndices,
     snapToPms,
     overrides,
     areas,
     pmsTolerance,
   )
-  const metaByIndex = new Map(meta.map((c) => [c.index, c]))
+  const disabledSet = new Set(disabledApplied)
+  const metaWithFlags = meta.map((c) => ({
+    ...c,
+    enabled: !disabledSet.has(c.index),
+  }))
+  const metaByIndex = new Map(
+    metaWithFlags.filter((c) => c.enabled !== false).map((c) => [c.index, c]),
+  )
   const { svg, regionCount } = stateToSvg(
-    labels,
+    finalLabels,
     fillRgb,
     metaByIndex,
     widthPx,
@@ -393,7 +472,7 @@ function assemble(
     smoothness,
     pathomitScale,
   )
-  return packResult(svg, widthPx, heightPx, meta, regionCount, state)
+  return packResult(svg, widthPx, heightPx, metaWithFlags, regionCount, state)
 }
 
 /**
@@ -405,6 +484,7 @@ export async function vectorizeColors(
   merges: Array<[number, number]> = [],
   overrides: PmsOverrides = {},
   background: RemoveBgOptions = { enabled: true },
+  disabledColors: number[] = [],
 ): Promise<ColorVectorResult> {
   const imageData = scaleToCanvas(source, settings.maxDim)
   // Product-photo backdrops must not become the "primary" palette color.
@@ -463,11 +543,13 @@ export async function vectorizeColors(
     },
     detail.pathomitScale,
     settings.pmsTolerance,
+    disabledColors,
   )
 }
 
 /**
- * Re-run SVG assembly after palette merges / PMS overrides without re-quantizing.
+ * Re-run SVG assembly after palette merges / PMS overrides / color toggles
+ * without re-quantizing.
  */
 export async function applyPaletteMerges(
   state: ColorVectorState,
@@ -477,6 +559,7 @@ export async function applyPaletteMerges(
   overrides: PmsOverrides = {},
   pathomitScale = 1,
   pmsTolerance = DEFAULT_COLOR_VECTOR_SETTINGS.pmsTolerance,
+  disabledColors: number[] = [],
 ): Promise<ColorVectorResult> {
   const areas = countLabelUsage(state.labels, state.palette.length)
   const autoMerges = autoMergeCloseColors(
@@ -500,6 +583,7 @@ export async function applyPaletteMerges(
     { ...state, mergeMap },
     pathomitScale,
     pmsTolerance,
+    disabledColors,
   )
 }
 

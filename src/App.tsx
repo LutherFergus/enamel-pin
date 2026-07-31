@@ -55,6 +55,7 @@ export default function App() {
   const [result, setResult] = useState<DualOutputResult | null>(null)
   const [merges, setMerges] = useState<Array<[number, number]>>([])
   const [pmsOverrides, setPmsOverrides] = useState<PmsOverrides>({})
+  const [disabledColors, setDisabledColors] = useState<number[]>([])
   const [chartOpen, setChartOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<PreviewTab>('source')
@@ -79,6 +80,7 @@ export default function App() {
     async (
       nextMerges: Array<[number, number]>,
       nextOverrides: PmsOverrides,
+      nextDisabled: number[] = disabledColors,
       nextSettings: DualOutputSettings = settings,
     ) => {
       if (!result) return
@@ -93,6 +95,7 @@ export default function App() {
           nextOverrides,
           nextSettings.vector.detailRetention,
           nextSettings.vector.pmsTolerance,
+          nextDisabled,
         )
         startTransition(() => {
           setResult((prev) => {
@@ -108,7 +111,7 @@ export default function App() {
         setBusy(false)
       }
     },
-    [result, settings],
+    [disabledColors, result, settings],
   )
 
   const runPipeline = useCallback(
@@ -118,6 +121,7 @@ export default function App() {
       nextMerges: Array<[number, number]>,
       nextOverrides: PmsOverrides,
       opts: { preserveView?: boolean } = {},
+      nextDisabled: number[] = [],
     ) => {
       setBusy(true)
       setError(null)
@@ -140,6 +144,7 @@ export default function App() {
               }
             })
           },
+          nextDisabled,
         )
         startTransition(() => {
           setResult((prev) => {
@@ -176,6 +181,7 @@ export default function App() {
     setSourceName(name)
     setMerges([])
     setPmsOverrides({})
+    setDisabledColors([])
   }, [])
 
   const onFile = useCallback(
@@ -215,22 +221,31 @@ export default function App() {
     if (!sourceImage) return
     setMerges([])
     setPmsOverrides({})
-    void runPipeline(sourceImage, settings, [], {}, { preserveView: true })
+    setDisabledColors([])
+    void runPipeline(sourceImage, settings, [], {}, { preserveView: true }, [])
   }, [runPipeline, settings, sourceImage])
 
   const onMergesChange = useCallback(
     async (nextMerges: Array<[number, number]>) => {
       setMerges(nextMerges)
-      await refreshVector(nextMerges, pmsOverrides)
+      await refreshVector(nextMerges, pmsOverrides, disabledColors)
     },
-    [pmsOverrides, refreshVector],
+    [disabledColors, pmsOverrides, refreshVector],
   )
 
   const onOverridePms = useCallback(
     async (paletteIndex: number, pmsCode: string) => {
       const next = { ...pmsOverrides, [paletteIndex]: pmsCode }
       setPmsOverrides(next)
-      await refreshVector(merges, next)
+      await refreshVector(merges, next, disabledColors)
+    },
+    [disabledColors, merges, pmsOverrides, refreshVector],
+  )
+
+  const onDisabledColorsChange = useCallback(
+    async (nextDisabled: number[]) => {
+      setDisabledColors(nextDisabled)
+      await refreshVector(merges, pmsOverrides, nextDisabled)
     },
     [merges, pmsOverrides, refreshVector],
   )
@@ -350,6 +365,8 @@ export default function App() {
               merges={merges}
               onChangeMerges={onMergesChange}
               onOverridePms={onOverridePms}
+              disabledColors={disabledColors}
+              onChangeDisabledColors={onDisabledColorsChange}
               disabled={busy}
             />
           )}

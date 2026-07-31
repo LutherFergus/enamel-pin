@@ -73,6 +73,7 @@ export async function createDualOutputs(
   merges: Array<[number, number]> = [],
   overrides: PmsOverrides = {},
   onOutlineReady?: (partial: DualOutputResult) => void,
+  disabledColors: number[] = [],
 ): Promise<DualOutputResult> {
   const background = {
     enabled: settings.removeBackground,
@@ -102,6 +103,7 @@ export async function createDualOutputs(
       merges,
       overrides,
       background,
+      disabledColors,
     )
     // Drop placeholder URLs.
     URL.revokeObjectURL(pendingVector.svgUrl)
@@ -127,6 +129,7 @@ export async function remergeVector(
   overrides: PmsOverrides = {},
   detailRetention = DEFAULT_COLOR_VECTOR_SETTINGS.detailRetention,
   pmsTolerance = DEFAULT_COLOR_VECTOR_SETTINGS.pmsTolerance,
+  disabledColors: number[] = [],
 ): Promise<DualOutputResult> {
   if (previous.vectorPending || previous.vector.palette.length === 0) {
     return previous
@@ -140,6 +143,7 @@ export async function remergeVector(
     overrides,
     pathomitScale,
     pmsTolerance,
+    disabledColors,
   )
   revokeProof(previous.proof)
   return {

@@ -28,6 +28,11 @@ export type PaletteColor = Rgb & {
   pmsName?: string
   /** ΔE distance from the pre-snap RGB sample to the PMS swatch. */
   pmsDeltaE?: number
+  /**
+   * When false, this fill is off — shapes remapped to the nearest on color.
+   * Undefined / true = on.
+   */
+  enabled?: boolean
 }
 
 export type VectorizeResult = {

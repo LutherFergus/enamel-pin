@@ -7,11 +7,14 @@ type Props = {
   merges: Array<[number, number]>
   onChangeMerges: (merges: Array<[number, number]>) => void
   onOverridePms: (paletteIndex: number, pmsCode: string) => void
+  /** Palette indices that are turned off. */
+  disabledColors: number[]
+  onChangeDisabledColors: (indices: number[]) => void
   disabled?: boolean
 }
 
 /**
- * Merge colors and assign Pantone Solid Coated (PMS) codes per fill.
+ * Merge colors, toggle fills on/off, and assign Pantone Solid Coated (PMS) codes.
  * Collapsed by default to keep the settings column compact.
  */
 export function PaletteMerge({
@@ -19,12 +22,17 @@ export function PaletteMerge({
   merges,
   onChangeMerges,
   onOverridePms,
+  disabledColors,
+  onChangeDisabledColors,
   disabled,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState<number | null>(null)
   const [pickerFor, setPickerFor] = useState<number | null>(null)
   const [mode, setMode] = useState<'merge' | 'pms'>('pms')
+
+  const disabledSet = new Set(disabledColors)
+  const onCount = palette.filter((c) => !disabledSet.has(c.index)).length
 
   const find = (i: number): number => {
     let cur = i
@@ -41,23 +49,35 @@ export function PaletteMerge({
 
   const onSwatch = (index: number) => {
     if (disabled) return
+    if (disabledSet.has(index)) return
     if (mode === 'pms') {
       setPickerFor(index)
       return
     }
     if (selected == null) {
       setSelected(index)
-      return
-    }
-    if (selected === index) {
+    } else if (selected === index) {
       setSelected(null)
-      return
+    } else {
+      onChangeMerges([...merges, [selected, index]])
+      setSelected(null)
     }
-    onChangeMerges([...merges, [selected, index]])
-    setSelected(null)
   }
 
-  const effectiveColors = new Set(palette.map((c) => find(c.index))).size
+  const onToggle = (index: number, currentlyOn: boolean) => {
+    if (disabled) return
+    if (currentlyOn && onCount <= 1) return
+    if (currentlyOn) {
+      onChangeDisabledColors([...disabledColors, index])
+    } else {
+      onChangeDisabledColors(disabledColors.filter((i) => i !== index))
+    }
+    if (selected === index) setSelected(null)
+  }
+
+  const effectiveColors = new Set(
+    palette.filter((c) => !disabledSet.has(c.index)).map((c) => find(c.index)),
+  ).size
 
   return (
     <div className={`palette-merge${open ? ' is-open' : ' is-collapsed'}`}>
@@ -69,7 +89,7 @@ export function PaletteMerge({
       >
         <h2>Palette / PMS</h2>
         <span className="palette-merge-summary">
-          {palette.length} fills
+          {onCount}/{palette.length} on
           {merges.length > 0 ? ` · ${effectiveColors} after merge` : ''}
           <span className="palette-merge-chevron" aria-hidden>
             {open ? '▾' : '▸'}
@@ -102,39 +122,74 @@ export function PaletteMerge({
           </div>
 
           <p className="hint">
+            Toggle a swatch off to fold its shapes into the nearest on color.
             {mode === 'pms'
-              ? 'Click a swatch to pick a Pantone Solid Coated color from the chart.'
+              ? ' Click a swatch to pick a Pantone Solid Coated color.'
               : selected == null
-                ? 'Click one swatch, then another to combine them.'
-                : 'Click a second swatch to merge into the first.'}
+                ? ' Click one on swatch, then another to combine them.'
+                : ' Click a second on swatch to merge into the first.'}
           </p>
 
           <div className="palette-list">
-            {palette.map((c) => (
-              <button
-                key={c.index}
-                type="button"
-                className={`palette-row ${selected === c.index ? 'selected' : ''}`}
-                disabled={disabled}
-                onClick={() => onSwatch(c.index)}
-                title={
-                  mode === 'pms'
-                    ? `Assign PMS for ${c.hex}`
-                    : `${c.hex} — click to merge`
-                }
-              >
-                <span className="swatch" style={{ background: c.hex }} />
-                <span className="palette-row-text">
-                  <strong>{c.pmsName ?? c.hex}</strong>
-                  <em>
-                    {c.hex}
-                    {c.pmsDeltaE != null && mode === 'pms'
-                      ? ` · ΔE ${c.pmsDeltaE}`
-                      : ''}
-                  </em>
-                </span>
-              </button>
-            ))}
+            {palette.map((c) => {
+              const isOn = !disabledSet.has(c.index)
+              const lastOn = isOn && onCount <= 1
+              return (
+                <div
+                  key={c.index}
+                  className={`palette-row${selected === c.index ? ' selected' : ''}${
+                    isOn ? '' : ' is-off'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    className={`palette-onoff${isOn ? ' is-on' : ''}`}
+                    disabled={disabled || lastOn}
+                    aria-pressed={isOn}
+                    aria-label={
+                      isOn
+                        ? `Turn off ${c.pmsName ?? c.hex}`
+                        : `Turn on ${c.pmsName ?? c.hex}`
+                    }
+                    title={
+                      lastOn
+                        ? 'At least one color must stay on'
+                        : isOn
+                          ? 'Turn off — shapes go to nearest on color'
+                          : 'Turn on'
+                    }
+                    onClick={() => onToggle(c.index, isOn)}
+                  >
+                    {isOn ? 'On' : 'Off'}
+                  </button>
+                  <button
+                    type="button"
+                    className="palette-row-main"
+                    disabled={disabled || !isOn}
+                    onClick={() => onSwatch(c.index)}
+                    title={
+                      !isOn
+                        ? 'Turn on to edit'
+                        : mode === 'pms'
+                          ? `Assign PMS for ${c.hex}`
+                          : `${c.hex} — click to merge`
+                    }
+                  >
+                    <span className="swatch" style={{ background: c.hex }} />
+                    <span className="palette-row-text">
+                      <strong>{c.pmsName ?? c.hex}</strong>
+                      <em>
+                        {c.hex}
+                        {c.pmsDeltaE != null && mode === 'pms'
+                          ? ` · ΔE ${c.pmsDeltaE}`
+                          : ''}
+                        {!isOn ? ' · off' : ''}
+                      </em>
+                    </span>
+                  </button>
+                </div>
+              )
+            })}
           </div>
 
           {mode === 'merge' && merges.length > 0 && (
@@ -153,6 +208,23 @@ export function PaletteMerge({
                 }}
               >
                 Reset merges
+              </button>
+            </div>
+          )}
+
+          {disabledColors.length > 0 && (
+            <div className="palette-merge-foot">
+              <p className="status">
+                {disabledColors.length} color{disabledColors.length === 1 ? '' : 's'}{' '}
+                off
+              </p>
+              <button
+                type="button"
+                className="linkish"
+                disabled={disabled}
+                onClick={() => onChangeDisabledColors([])}
+              >
+                Turn all on
               </button>
             </div>
           )}
