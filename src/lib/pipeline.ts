@@ -48,7 +48,8 @@ export async function createDualOutputs(
     tolerance: settings.backgroundTolerance,
   }
   const [outline, vector] = await Promise.all([
-    extractOutlinePng(source, settings.outline, background),
+    // Outline keeps its own gentle knockout (era when color count hit 32).
+    extractOutlinePng(source, settings.outline),
     vectorizeColors(source, settings.vector, merges, overrides, background),
   ])
   return {

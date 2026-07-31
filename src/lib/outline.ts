@@ -1,5 +1,5 @@
 import { init as initPotrace, potrace } from 'esm-potrace-wasm'
-import type { RemoveBgOptions } from './background'
+import { knockOutSolidBackground } from './background'
 import type { Rgb } from './types'
 
 export type OutlineSettings = {
@@ -9,10 +9,7 @@ export type OutlineSettings = {
    * Higher = includes lighter hatches / thinner strokes.
    */
   sensitivity: number
-  /**
-   * Metal-wall width in working pixels (0–3, decimal).
-   * 0 = hairline (almost non-existent); higher fattens after thinning to a centerline.
-   */
+  /** Extra stroke thicken in pixels (0–6). Prefer 0–1 for clean Vectorizer-style die-lines. */
   thickness: number
   /** Invert: white strokes on transparent instead of black. */
   invert: boolean
@@ -21,7 +18,7 @@ export type OutlineSettings = {
 }
 
 export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
-  sensitivity: 42,
+  sensitivity: 48,
   thickness: 0,
   invert: false,
   maxDim: 1600,
@@ -73,17 +70,11 @@ function drawScaled(
 export async function extractOutlinePng(
   source: HTMLImageElement | ImageBitmap,
   settings: OutlineSettings,
-  background: RemoveBgOptions = { enabled: true },
 ): Promise<OutlineResult> {
   const { canvas, ctx, w, h } = drawScaled(source, settings.maxDim)
   const imageData = ctx.getImageData(0, 0, w, h)
 
-  // Outline uses a gentler knockout than the vector path. Aggressive near-white
-  // flood + halo cleanup eats anti-aliased edges and the ink mask then
-  // re-thickens every stroke. Flat studio backdrops still clear cleanly.
-  if (background.enabled !== false) {
-    knockOutFlatBackdrop(imageData)
-  }
+  knockOutSolidBackground(imageData)
 
   const { mask: rawMask, lineArt } = extractInkMask(imageData, settings.sensitivity)
   let mask = rawMask
@@ -97,18 +88,22 @@ export async function extractOutlinePng(
   if (lineArt) {
     // Vectorizer-style B&W: never fill white islands (polka dots, spokes, face).
     mask = removeIsolatedInk(mask, w, h)
-    // Collapse fat source ink to a 1px centerline so thickness=0 is a hairline.
-    mask = thinToHairline(mask, w, h)
   } else {
-    // Color pin art: hollow black fills into 1px metal walls, then thickness fattens.
-    mask = toStrokeWalls(mask, w, h, 1)
+    // Color pin art often has large black enamel fills. Hollow those into
+    // metal-wall strokes so Outline is a die-line plate, not a flooded silhouette.
+    // Thin strokes (< ~5px) survive intact; solid fills become perimeter walls.
+    mask = toStrokeWalls(mask, w, h, 2)
+    mask = dilate(mask, w, h, 1)
     mask = majorityClean(mask, w, h)
     mask = removeSmallComponents(mask, w, h, Math.max(10, Math.round(w * h * 0.00003)))
   }
 
-  const thickness = Math.max(0, Math.min(3, settings.thickness))
-  if (thickness >= 0.05) {
-    mask = dilateFloat(mask, w, h, thickness)
+  const thickness = Math.max(0, Math.min(6, Math.round(settings.thickness)))
+  if (thickness > 0) {
+    mask = dilate(mask, w, h, thickness)
+  } else if (!lineArt) {
+    // Default ~1px wall weight so die-lines stay readable after Potrace.
+    mask = dilate(mask, w, h, 1)
   }
 
   // Soft enamel outline plate is always pure black (or white if inverted).
@@ -174,78 +169,6 @@ function toStrokeWalls(
     if (dark[i] && !eroded[i]) out[i] = 255
   }
   return out
-}
-
-/**
- * Gentle studio-backdrop clear for outline only.
- * Only floods clearly flat light/dark corners — does not eat AA stroke edges.
- */
-function knockOutFlatBackdrop(imageData: ImageData): void {
-  const { data, width, height } = imageData
-  const samples: Array<{ r: number; g: number; b: number }> = []
-  const pts: Array<[number, number]> = [
-    [2, 2],
-    [width - 3, 2],
-    [2, height - 3],
-    [width - 3, height - 3],
-    [width >> 1, 2],
-    [width >> 1, height - 3],
-  ]
-  for (const [x, y] of pts) {
-    if (x < 0 || y < 0 || x >= width || y >= height) continue
-    const o = (y * width + x) * 4
-    if (data[o + 3] < 16) continue
-    samples.push({ r: data[o], g: data[o + 1], b: data[o + 2] })
-  }
-  if (samples.length < 2) return
-
-  const avg = {
-    r: Math.round(samples.reduce((s, c) => s + c.r, 0) / samples.length),
-    g: Math.round(samples.reduce((s, c) => s + c.g, 0) / samples.length),
-    b: Math.round(samples.reduce((s, c) => s + c.b, 0) / samples.length),
-  }
-  const isLight = avg.r > 230 && avg.g > 230 && avg.b > 230
-  const isDark = avg.r < 28 && avg.g < 28 && avg.b < 28
-  if (!isLight && !isDark) return
-
-  const visited = new Uint8Array(width * height)
-  const stack: number[] = []
-  const isBackdrop = (o: number) => {
-    if (data[o + 3] < 16) return true
-    const r = data[o]
-    const g = data[o + 1]
-    const b = data[o + 2]
-    if (isLight) {
-      return r > 220 && g > 220 && b > 220
-    }
-    return r < 40 && g < 40 && b < 40
-  }
-  const push = (x: number, y: number) => {
-    if (x < 0 || y < 0 || x >= width || y >= height) return
-    const i = y * width + x
-    if (visited[i]) return
-    if (!isBackdrop(i * 4)) return
-    visited[i] = 1
-    stack.push(i)
-  }
-  for (let x = 0; x < width; x++) {
-    push(x, 0)
-    push(x, height - 1)
-  }
-  for (let y = 0; y < height; y++) {
-    push(0, y)
-    push(width - 1, y)
-  }
-  while (stack.length) {
-    const i = stack.pop()!
-    data[i * 4 + 3] = 0
-    const x = i % width
-    const y = (i / width) | 0
-    push(x - 1, y)
-    push(x + 1, y)
-    push(x, y - 1)
-    push(x, y + 1)
-  }
 }
 
 /**
@@ -373,10 +296,8 @@ function extractInkMask(
     (darkish + lightish) / opaque > 0.82
 
   const t = Math.max(0, Math.min(100, sensitivity)) / 100
-  // Keep line-art ceil tight so anti-aliased stroke edges don't become solid ink
-  // (that was fattening every wall vs Vectorizer / our earlier thin die-lines).
-  const inkCeil = lineArt ? 32 + t * 48 : 28 + t * 55
-  const contrastMin = lineArt ? 10 + (1 - t) * 18 : 14 + (1 - t) * 22
+  const inkCeil = lineArt ? 55 + t * 100 : 28 + t * 55
+  const contrastMin = lineArt ? 6 + (1 - t) * 14 : 14 + (1 - t) * 22
 
   const mask = new Uint8Array(n)
   for (let y = 1; y < height - 1; y++) {
@@ -401,8 +322,8 @@ function extractInkMask(
       const nearBlack = L <= inkCeil * 0.55 && chromaAt(data, o) < 35
       const darkEdge = L <= inkCeil && contrast >= contrastMin
       const strongInk = L <= 22
-      // Line art: only true dark ink — not mid-gray AA halos around strokes.
-      const lineInk = lineArt && L <= Math.min(inkCeil, 48) && chromaAt(data, o) < 28
+      // Pure line-art: any sufficiently dark low-chroma pixel is ink.
+      const lineInk = lineArt && L <= inkCeil && chromaAt(data, o) < 40
 
       if (nearBlack || darkEdge || strongInk || lineInk) mask[i] = 255
     }
@@ -528,17 +449,15 @@ function removeIsolatedInk(mask: Uint8Array, w: number, h: number): Uint8Array {
   return out
 }
 
-/** Dilate by a fractional pixel radius (Euclidean disk). */
-function dilateFloat(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
-  if (radius < 0.05) return mask
+function dilate(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
+  if (radius <= 0) return mask
   const out = new Uint8Array(mask)
-  const rCeil = Math.max(1, Math.ceil(radius))
   const r2 = radius * radius
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       if (!mask[y * w + x]) continue
-      for (let dy = -rCeil; dy <= rCeil; dy++) {
-        for (let dx = -rCeil; dx <= rCeil; dx++) {
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
           if (dx * dx + dy * dy > r2) continue
           const nx = x + dx
           const ny = y + dy
@@ -549,66 +468,6 @@ function dilateFloat(mask: Uint8Array, w: number, h: number, radius: number): Ui
     }
   }
   return out
-}
-
-/**
- * Collapse thick ink to a ~1px medial hairline so thickness=0 is nearly invisible
- * instead of preserving the source artwork's fat black strokes.
- */
-function thinToHairline(mask: Uint8Array, w: number, h: number): Uint8Array {
-  const dist = chebyshevDistance(mask, w, h)
-  const out = new Uint8Array(w * h)
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      const i = y * w + x
-      if (!mask[i]) continue
-      const d = dist[i]
-      // Ridge / medial axis: local Chebyshev-distance maximum.
-      let maxN = 0
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (!dx && !dy) continue
-          const nd = dist[(y + dy) * w + (x + dx)]
-          if (nd > maxN) maxN = nd
-        }
-      }
-      if (d >= maxN) out[i] = 255
-    }
-  }
-  return removeIsolatedInk(out, w, h)
-}
-
-/** Chebyshev distance from each ink pixel to nearest background. */
-function chebyshevDistance(mask: Uint8Array, w: number, h: number): Uint16Array {
-  const dist = new Uint16Array(w * h)
-  const INF = 65535
-  for (let i = 0; i < w * h; i++) dist[i] = mask[i] ? INF : 0
-
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = y * w + x
-      if (!mask[i]) continue
-      let best = dist[i]
-      if (x > 0) best = Math.min(best, dist[i - 1] + 1)
-      if (y > 0) best = Math.min(best, dist[i - w] + 1)
-      if (x > 0 && y > 0) best = Math.min(best, dist[i - w - 1] + 1)
-      if (x + 1 < w && y > 0) best = Math.min(best, dist[i - w + 1] + 1)
-      dist[i] = best
-    }
-  }
-  for (let y = h - 1; y >= 0; y--) {
-    for (let x = w - 1; x >= 0; x--) {
-      const i = y * w + x
-      if (!mask[i]) continue
-      let best = dist[i]
-      if (x + 1 < w) best = Math.min(best, dist[i + 1] + 1)
-      if (y + 1 < h) best = Math.min(best, dist[i + w] + 1)
-      if (x + 1 < w && y + 1 < h) best = Math.min(best, dist[i + w + 1] + 1)
-      if (x > 0 && y + 1 < h) best = Math.min(best, dist[i + w - 1] + 1)
-      dist[i] = best
-    }
-  }
-  return dist
 }
 
 function erode(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {

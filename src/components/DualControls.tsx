@@ -13,11 +13,6 @@ function roundInt(n: number) {
   return Math.round(n)
 }
 
-function formatPx(n: number) {
-  const v = Math.round(n * 100) / 100
-  return Number.isInteger(v) ? `${v}` : v.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
-}
-
 export function DualControls({
   settings,
   onChange,
@@ -120,25 +115,22 @@ export function DualControls({
       <div className="field">
         <label>
           <span>Stroke thickness</span>
-          <span className="value">{formatPx(settings.outline.thickness)}px</span>
+          <span className="value">{roundInt(settings.outline.thickness)}px</span>
         </label>
         <input
           type="range"
           min={0}
-          max={3}
+          max={6}
           step="any"
           value={settings.outline.thickness}
           disabled={disabled}
-          onChange={(e) => {
-            const raw = Number(e.target.value)
-            const thickness = Math.round(Math.max(0, Math.min(3, raw)) * 100) / 100
-            patchOutline({ thickness })
-          }}
+          onChange={(e) =>
+            patchOutline({ thickness: roundInt(Number(e.target.value)) })
+          }
         />
       </div>
       <p className="hint">
-        Free 0–3px. 0 = hairline (almost non-existent); raise for heavier metal
-        walls. Reprocess to apply.
+        Transparent die-line plate — metal-wall strokes only, not flooded black fills.
       </p>
 
       <h2>Color vector (SVG)</h2>
