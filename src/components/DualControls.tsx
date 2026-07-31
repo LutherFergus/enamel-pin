@@ -9,6 +9,15 @@ type Props = {
   onResetDefaults?: () => void
 }
 
+function roundInt(n: number) {
+  return Math.round(n)
+}
+
+function formatPx(n: number) {
+  const v = Math.round(n * 100) / 100
+  return Number.isInteger(v) ? `${v}` : v.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
+}
+
 export function DualControls({
   settings,
   onChange,
@@ -65,17 +74,17 @@ export function DualControls({
         <div className="field">
           <label>
             <span>Background tolerance</span>
-            <span className="value">{settings.backgroundTolerance}</span>
+            <span className="value">{roundInt(settings.backgroundTolerance)}</span>
           </label>
           <input
             type="range"
             min={8}
             max={80}
-            step={1}
+            step="any"
             value={settings.backgroundTolerance}
             disabled={disabled}
             onChange={(e) =>
-              patchRoot({ backgroundTolerance: Number(e.target.value) })
+              patchRoot({ backgroundTolerance: roundInt(Number(e.target.value)) })
             }
           />
         </div>
@@ -90,16 +99,18 @@ export function DualControls({
       <div className="field">
         <label>
           <span>Outline detail</span>
-          <span className="value">{settings.outline.sensitivity}</span>
+          <span className="value">{roundInt(settings.outline.sensitivity)}</span>
         </label>
         <input
           type="range"
           min={0}
           max={100}
-          step={1}
+          step="any"
           value={settings.outline.sensitivity}
           disabled={disabled}
-          onChange={(e) => patchOutline({ sensitivity: Number(e.target.value) })}
+          onChange={(e) =>
+            patchOutline({ sensitivity: roundInt(Number(e.target.value)) })
+          }
         />
       </div>
       <p className="hint">
@@ -109,37 +120,43 @@ export function DualControls({
       <div className="field">
         <label>
           <span>Stroke thickness</span>
-          <span className="value">{settings.outline.thickness}px</span>
+          <span className="value">{formatPx(settings.outline.thickness)}px</span>
         </label>
         <input
           type="range"
           min={0}
-          max={6}
-          step={1}
+          max={3}
+          step="any"
           value={settings.outline.thickness}
           disabled={disabled}
-          onChange={(e) => patchOutline({ thickness: Number(e.target.value) })}
+          onChange={(e) => {
+            const raw = Number(e.target.value)
+            const thickness = Math.round(Math.max(0, Math.min(3, raw)) * 100) / 100
+            patchOutline({ thickness })
+          }}
         />
       </div>
       <p className="hint">
-        0 keeps thin Vectorizer-style die-lines. Higher fattens metal walls after
-        tracing. Transparent plate — strokes only, not flooded black fills.
+        Free 0–3px. 0 = hairline (almost non-existent); raise for heavier metal
+        walls. Reprocess to apply.
       </p>
 
       <h2>Color vector (SVG)</h2>
       <div className="field">
         <label>
           <span>Color count</span>
-          <span className="value">{settings.vector.colorCount}</span>
+          <span className="value">{roundInt(settings.vector.colorCount)}</span>
         </label>
         <input
           type="range"
           min={4}
           max={32}
-          step={1}
+          step="any"
           value={settings.vector.colorCount}
           disabled={disabled}
-          onChange={(e) => patchVector({ colorCount: Number(e.target.value) })}
+          onChange={(e) =>
+            patchVector({ colorCount: roundInt(Number(e.target.value)) })
+          }
         />
       </div>
       <p className="hint">
@@ -162,17 +179,17 @@ export function DualControls({
       <div className="field">
         <label>
           <span>PMS match tolerance</span>
-          <span className="value">ΔE {settings.vector.pmsTolerance}</span>
+          <span className="value">ΔE {roundInt(settings.vector.pmsTolerance)}</span>
         </label>
         <input
           type="range"
           min={0}
           max={30}
-          step={1}
+          step="any"
           value={settings.vector.pmsTolerance}
           disabled={disabled}
           onChange={(e) =>
-            patchVector({ pmsTolerance: Number(e.target.value) })
+            patchVector({ pmsTolerance: roundInt(Number(e.target.value)) })
           }
         />
       </div>
@@ -183,16 +200,18 @@ export function DualControls({
       <div className="field">
         <label>
           <span>Smoothness</span>
-          <span className="value">{settings.vector.smoothness}</span>
+          <span className="value">{roundInt(settings.vector.smoothness)}</span>
         </label>
         <input
           type="range"
           min={0}
           max={5}
-          step={1}
+          step="any"
           value={settings.vector.smoothness}
           disabled={disabled}
-          onChange={(e) => patchVector({ smoothness: Number(e.target.value) })}
+          onChange={(e) =>
+            patchVector({ smoothness: roundInt(Number(e.target.value)) })
+          }
         />
       </div>
       <p className="hint">
@@ -202,17 +221,17 @@ export function DualControls({
       <div className="field">
         <label>
           <span>Detail retention</span>
-          <span className="value">{settings.vector.detailRetention}</span>
+          <span className="value">{roundInt(settings.vector.detailRetention)}</span>
         </label>
         <input
           type="range"
           min={0}
           max={100}
-          step={1}
+          step="any"
           value={settings.vector.detailRetention}
           disabled={disabled}
           onChange={(e) => {
-            const detailRetention = Number(e.target.value)
+            const detailRetention = roundInt(Number(e.target.value))
             const { minRegionRatio } = detailRetentionParams(detailRetention)
             patchVector({ detailRetention, minRegionRatio })
           }}

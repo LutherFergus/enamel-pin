@@ -42,7 +42,9 @@ export function sanitizeSettings(raw: unknown): DualOutputSettings {
       base.outline.sensitivity = Math.max(0, Math.min(100, o.outline.sensitivity))
     }
     if (isFiniteNumber(o.outline.thickness)) {
-      base.outline.thickness = Math.max(0, Math.min(6, Math.round(o.outline.thickness)))
+      // Continuous 0–3px; migrate older 0–6 integer saves down into range.
+      const raw = o.outline.thickness > 3 ? (o.outline.thickness / 6) * 3 : o.outline.thickness
+      base.outline.thickness = Math.round(Math.max(0, Math.min(3, raw)) * 100) / 100
     }
     if (typeof o.outline.invert === 'boolean') {
       base.outline.invert = o.outline.invert

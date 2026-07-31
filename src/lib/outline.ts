@@ -9,7 +9,10 @@ export type OutlineSettings = {
    * Higher = includes lighter hatches / thinner strokes.
    */
   sensitivity: number
-  /** Extra stroke thicken in pixels (0–6). Prefer 0–1 for clean Vectorizer-style die-lines. */
+  /**
+   * Metal-wall width in working pixels (0–3, decimal).
+   * 0 = hairline (almost non-existent); higher fattens after thinning to a centerline.
+   */
   thickness: number
   /** Invert: white strokes on transparent instead of black. */
   invert: boolean
@@ -94,18 +97,18 @@ export async function extractOutlinePng(
   if (lineArt) {
     // Vectorizer-style B&W: never fill white islands (polka dots, spokes, face).
     mask = removeIsolatedInk(mask, w, h)
+    // Collapse fat source ink to a 1px centerline so thickness=0 is a hairline.
+    mask = thinToHairline(mask, w, h)
   } else {
-    // Color pin art often has large black enamel fills. Hollow those into
-    // metal-wall strokes so Outline is a die-line plate, not a flooded silhouette.
-    // Keep walls thin — thickness slider is the only intentional fatten.
+    // Color pin art: hollow black fills into 1px metal walls, then thickness fattens.
     mask = toStrokeWalls(mask, w, h, 1)
     mask = majorityClean(mask, w, h)
     mask = removeSmallComponents(mask, w, h, Math.max(10, Math.round(w * h * 0.00003)))
   }
 
-  const thickness = Math.max(0, Math.min(6, Math.round(settings.thickness)))
-  if (thickness > 0) {
-    mask = dilate(mask, w, h, thickness)
+  const thickness = Math.max(0, Math.min(3, settings.thickness))
+  if (thickness >= 0.05) {
+    mask = dilateFloat(mask, w, h, thickness)
   }
 
   // Soft enamel outline plate is always pure black (or white if inverted).
@@ -525,15 +528,17 @@ function removeIsolatedInk(mask: Uint8Array, w: number, h: number): Uint8Array {
   return out
 }
 
-function dilate(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
-  if (radius <= 0) return mask
+/** Dilate by a fractional pixel radius (Euclidean disk). */
+function dilateFloat(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
+  if (radius < 0.05) return mask
   const out = new Uint8Array(mask)
+  const rCeil = Math.max(1, Math.ceil(radius))
   const r2 = radius * radius
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       if (!mask[y * w + x]) continue
-      for (let dy = -radius; dy <= radius; dy++) {
-        for (let dx = -radius; dx <= radius; dx++) {
+      for (let dy = -rCeil; dy <= rCeil; dy++) {
+        for (let dx = -rCeil; dx <= rCeil; dx++) {
           if (dx * dx + dy * dy > r2) continue
           const nx = x + dx
           const ny = y + dy
@@ -544,6 +549,66 @@ function dilate(mask: Uint8Array, w: number, h: number, radius: number): Uint8Ar
     }
   }
   return out
+}
+
+/**
+ * Collapse thick ink to a ~1px medial hairline so thickness=0 is nearly invisible
+ * instead of preserving the source artwork's fat black strokes.
+ */
+function thinToHairline(mask: Uint8Array, w: number, h: number): Uint8Array {
+  const dist = chebyshevDistance(mask, w, h)
+  const out = new Uint8Array(w * h)
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x
+      if (!mask[i]) continue
+      const d = dist[i]
+      // Ridge / medial axis: local Chebyshev-distance maximum.
+      let maxN = 0
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue
+          const nd = dist[(y + dy) * w + (x + dx)]
+          if (nd > maxN) maxN = nd
+        }
+      }
+      if (d >= maxN) out[i] = 255
+    }
+  }
+  return removeIsolatedInk(out, w, h)
+}
+
+/** Chebyshev distance from each ink pixel to nearest background. */
+function chebyshevDistance(mask: Uint8Array, w: number, h: number): Uint16Array {
+  const dist = new Uint16Array(w * h)
+  const INF = 65535
+  for (let i = 0; i < w * h; i++) dist[i] = mask[i] ? INF : 0
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x
+      if (!mask[i]) continue
+      let best = dist[i]
+      if (x > 0) best = Math.min(best, dist[i - 1] + 1)
+      if (y > 0) best = Math.min(best, dist[i - w] + 1)
+      if (x > 0 && y > 0) best = Math.min(best, dist[i - w - 1] + 1)
+      if (x + 1 < w && y > 0) best = Math.min(best, dist[i - w + 1] + 1)
+      dist[i] = best
+    }
+  }
+  for (let y = h - 1; y >= 0; y--) {
+    for (let x = w - 1; x >= 0; x--) {
+      const i = y * w + x
+      if (!mask[i]) continue
+      let best = dist[i]
+      if (x + 1 < w) best = Math.min(best, dist[i + 1] + 1)
+      if (y + 1 < h) best = Math.min(best, dist[i + w] + 1)
+      if (x + 1 < w && y + 1 < h) best = Math.min(best, dist[i + w + 1] + 1)
+      if (x > 0 && y + 1 < h) best = Math.min(best, dist[i + w - 1] + 1)
+      dist[i] = best
+    }
+  }
+  return dist
 }
 
 function erode(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
