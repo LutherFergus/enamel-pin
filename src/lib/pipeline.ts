@@ -80,8 +80,9 @@ export async function createDualOutputs(
   }
 
   // Outline first — don't wait on the heavy color pass (detail 100 can hang phones).
+  // Outline prep: remove bg → fill white → trace → transparent non-ink again.
   await yieldToUi()
-  const outline = await extractOutlinePng(source, settings.outline)
+  const outline = await extractOutlinePng(source, settings.outline, background)
   await yieldToUi()
 
   const pendingVector = placeholderVector(outline.widthPx, outline.heightPx)

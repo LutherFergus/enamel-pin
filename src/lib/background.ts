@@ -155,6 +155,35 @@ export function knockOutSolidBackground(imageData: ImageData): void {
   removeBackground(imageData, { enabled: true, tolerance: 42 })
 }
 
+/**
+ * Paint every non-opaque pixel onto solid white (composites AA edges).
+ * Used after bg removal so outline runs against paper white, then the
+ * outline plate clears white again (transparent non-ink).
+ */
+export function fillTransparentWithWhite(imageData: ImageData): number {
+  const { data } = imageData
+  let filled = 0
+  for (let i = 0; i < data.length; i += 4) {
+    const a = data[i + 3]
+    if (a === 255) continue
+    if (a === 0) {
+      data[i] = 255
+      data[i + 1] = 255
+      data[i + 2] = 255
+      data[i + 3] = 255
+    } else {
+      const t = a / 255
+      const inv = 1 - t
+      data[i] = Math.round(data[i] * t + 255 * inv)
+      data[i + 1] = Math.round(data[i + 1] * t + 255 * inv)
+      data[i + 2] = Math.round(data[i + 2] * t + 255 * inv)
+      data[i + 3] = 255
+    }
+    filled++
+  }
+  return filled
+}
+
 function sampleEdgeColors(
   data: Uint8ClampedArray,
   width: number,

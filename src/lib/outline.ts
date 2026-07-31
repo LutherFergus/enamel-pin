@@ -1,5 +1,9 @@
 import { init as initPotrace, potrace } from 'esm-potrace-wasm'
-import { knockOutSolidBackground } from './background'
+import {
+  fillTransparentWithWhite,
+  removeBackground,
+  type RemoveBgOptions,
+} from './background'
 import type { Rgb } from './types'
 
 export type OutlineSettings = {
@@ -67,17 +71,27 @@ function drawScaled(
  * Soft-enamel die-line outline as transparent PNG + transparent SVG.
  * SVG has no background rectangle — only ink geometry on clear.
  *
+ * When background removal is on:
+ *   1. Knock out the studio backdrop
+ *   2. Fill cleared pixels with opaque white
+ *   3. Extract the ink mask against that white paper
+ *   4. Emit outline with white removed (transparent non-ink)
+ *
  * Line-art path matches the detail-black / imaengine polka reference:
  * preserve fills+holes, light speck cleanup, Potrace without supersample.
  */
 export async function extractOutlinePng(
   source: HTMLImageElement | ImageBitmap,
   settings: OutlineSettings,
+  background: RemoveBgOptions = { enabled: true, tolerance: 42 },
 ): Promise<OutlineResult> {
   const { canvas, ctx, w, h } = drawScaled(source, settings.maxDim)
   const imageData = ctx.getImageData(0, 0, w, h)
 
-  knockOutSolidBackground(imageData)
+  if (background.enabled !== false) {
+    removeBackground(imageData, background)
+    fillTransparentWithWhite(imageData)
+  }
 
   const { mask: rawMask, lineArt, avgChroma } = extractInkMask(
     imageData,
