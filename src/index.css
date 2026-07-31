@@ -427,11 +427,23 @@ img {
 }
 
 .meta-bar {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.meta-bar-top {
   display: flex;
   flex-wrap: wrap;
   gap: 0.6rem 1rem;
   align-items: center;
   justify-content: space-between;
+}
+
+.reprocess-btn {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0.55rem 1.05rem;
+  font-size: 0.88rem;
 }
 
 .palette {

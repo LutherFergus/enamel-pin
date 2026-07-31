@@ -329,14 +329,6 @@ export default function App() {
           <div className="actions">
             <button
               type="button"
-              className="btn btn-primary"
-              onClick={onApply}
-              disabled={!sourceImage || busy}
-            >
-              {busy ? 'Processing…' : 'Reprocess'}
-            </button>
-            <button
-              type="button"
               className="btn btn-secondary"
               onClick={downloadProof}
               disabled={!result || busy}
@@ -372,38 +364,48 @@ export default function App() {
 
         <section className="panel preview-panel">
           <div className="meta-bar">
-            <div className="tabs" role="tablist" aria-label="Preview mode">
+            <div className="meta-bar-top">
+              <div className="tabs" role="tablist" aria-label="Preview mode">
+                <button
+                  type="button"
+                  className={`tab ${viewMode === 'source' ? 'active' : ''}`}
+                  onClick={() => setViewMode('source')}
+                  disabled={!sourceUrl}
+                >
+                  Original
+                </button>
+                <button
+                  type="button"
+                  className={`tab ${viewMode === 'vector' ? 'active' : ''}`}
+                  onClick={() => setViewMode('vector')}
+                  disabled={!result}
+                >
+                  Vector
+                </button>
+                <button
+                  type="button"
+                  className={`tab ${viewMode === 'outline' ? 'active' : ''}`}
+                  onClick={() => setViewMode('outline')}
+                  disabled={!result}
+                >
+                  Outline
+                </button>
+                <button
+                  type="button"
+                  className={`tab ${viewMode === 'proof' ? 'active' : ''}`}
+                  onClick={() => setViewMode('proof')}
+                  disabled={!result}
+                >
+                  Proof
+                </button>
+              </div>
               <button
                 type="button"
-                className={`tab ${viewMode === 'source' ? 'active' : ''}`}
-                onClick={() => setViewMode('source')}
-                disabled={!sourceUrl}
+                className="btn btn-primary reprocess-btn"
+                onClick={onApply}
+                disabled={!sourceImage || busy}
               >
-                Original
-              </button>
-              <button
-                type="button"
-                className={`tab ${viewMode === 'vector' ? 'active' : ''}`}
-                onClick={() => setViewMode('vector')}
-                disabled={!result}
-              >
-                Vector
-              </button>
-              <button
-                type="button"
-                className={`tab ${viewMode === 'outline' ? 'active' : ''}`}
-                onClick={() => setViewMode('outline')}
-                disabled={!result}
-              >
-                Outline
-              </button>
-              <button
-                type="button"
-                className={`tab ${viewMode === 'proof' ? 'active' : ''}`}
-                onClick={() => setViewMode('proof')}
-                disabled={!result}
-              >
-                Proof
+                {busy ? 'Processing…' : 'Reprocess'}
               </button>
             </div>
             <p className={`status ${error ? 'error' : ''}`}>{statusText}</p>
