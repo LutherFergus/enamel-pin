@@ -122,7 +122,8 @@ export function DualControls({
         />
       </div>
       <p className="hint">
-        Transparent die-line plate — metal-wall strokes only, not flooded black fills.
+        0 keeps thin Vectorizer-style die-lines. Higher fattens metal walls after
+        tracing. Transparent plate — strokes only, not flooded black fills.
       </p>
 
       <h2>Color vector (SVG)</h2>

@@ -1,5 +1,5 @@
 import { init as initPotrace, potrace } from 'esm-potrace-wasm'
-import { removeBackground, type RemoveBgOptions } from './background'
+import type { RemoveBgOptions } from './background'
 import type { Rgb } from './types'
 
 export type OutlineSettings = {
@@ -18,7 +18,7 @@ export type OutlineSettings = {
 }
 
 export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
-  sensitivity: 48,
+  sensitivity: 42,
   thickness: 0,
   invert: false,
   maxDim: 1600,
@@ -75,7 +75,12 @@ export async function extractOutlinePng(
   const { canvas, ctx, w, h } = drawScaled(source, settings.maxDim)
   const imageData = ctx.getImageData(0, 0, w, h)
 
-  removeBackground(imageData, background)
+  // Outline uses a gentler knockout than the vector path. Aggressive near-white
+  // flood + halo cleanup eats anti-aliased edges and the ink mask then
+  // re-thickens every stroke. Flat studio backdrops still clear cleanly.
+  if (background.enabled !== false) {
+    knockOutFlatBackdrop(imageData)
+  }
 
   const { mask: rawMask, lineArt } = extractInkMask(imageData, settings.sensitivity)
   let mask = rawMask
@@ -92,9 +97,8 @@ export async function extractOutlinePng(
   } else {
     // Color pin art often has large black enamel fills. Hollow those into
     // metal-wall strokes so Outline is a die-line plate, not a flooded silhouette.
-    // Thin strokes (< ~5px) survive intact; solid fills become perimeter walls.
-    mask = toStrokeWalls(mask, w, h, 2)
-    mask = dilate(mask, w, h, 1)
+    // Keep walls thin — thickness slider is the only intentional fatten.
+    mask = toStrokeWalls(mask, w, h, 1)
     mask = majorityClean(mask, w, h)
     mask = removeSmallComponents(mask, w, h, Math.max(10, Math.round(w * h * 0.00003)))
   }
@@ -102,9 +106,6 @@ export async function extractOutlinePng(
   const thickness = Math.max(0, Math.min(6, Math.round(settings.thickness)))
   if (thickness > 0) {
     mask = dilate(mask, w, h, thickness)
-  } else if (!lineArt) {
-    // Default ~1px wall weight so die-lines stay readable after Potrace.
-    mask = dilate(mask, w, h, 1)
   }
 
   // Soft enamel outline plate is always pure black (or white if inverted).
@@ -170,6 +171,78 @@ function toStrokeWalls(
     if (dark[i] && !eroded[i]) out[i] = 255
   }
   return out
+}
+
+/**
+ * Gentle studio-backdrop clear for outline only.
+ * Only floods clearly flat light/dark corners — does not eat AA stroke edges.
+ */
+function knockOutFlatBackdrop(imageData: ImageData): void {
+  const { data, width, height } = imageData
+  const samples: Array<{ r: number; g: number; b: number }> = []
+  const pts: Array<[number, number]> = [
+    [2, 2],
+    [width - 3, 2],
+    [2, height - 3],
+    [width - 3, height - 3],
+    [width >> 1, 2],
+    [width >> 1, height - 3],
+  ]
+  for (const [x, y] of pts) {
+    if (x < 0 || y < 0 || x >= width || y >= height) continue
+    const o = (y * width + x) * 4
+    if (data[o + 3] < 16) continue
+    samples.push({ r: data[o], g: data[o + 1], b: data[o + 2] })
+  }
+  if (samples.length < 2) return
+
+  const avg = {
+    r: Math.round(samples.reduce((s, c) => s + c.r, 0) / samples.length),
+    g: Math.round(samples.reduce((s, c) => s + c.g, 0) / samples.length),
+    b: Math.round(samples.reduce((s, c) => s + c.b, 0) / samples.length),
+  }
+  const isLight = avg.r > 230 && avg.g > 230 && avg.b > 230
+  const isDark = avg.r < 28 && avg.g < 28 && avg.b < 28
+  if (!isLight && !isDark) return
+
+  const visited = new Uint8Array(width * height)
+  const stack: number[] = []
+  const isBackdrop = (o: number) => {
+    if (data[o + 3] < 16) return true
+    const r = data[o]
+    const g = data[o + 1]
+    const b = data[o + 2]
+    if (isLight) {
+      return r > 220 && g > 220 && b > 220
+    }
+    return r < 40 && g < 40 && b < 40
+  }
+  const push = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return
+    const i = y * width + x
+    if (visited[i]) return
+    if (!isBackdrop(i * 4)) return
+    visited[i] = 1
+    stack.push(i)
+  }
+  for (let x = 0; x < width; x++) {
+    push(x, 0)
+    push(x, height - 1)
+  }
+  for (let y = 0; y < height; y++) {
+    push(0, y)
+    push(width - 1, y)
+  }
+  while (stack.length) {
+    const i = stack.pop()!
+    data[i * 4 + 3] = 0
+    const x = i % width
+    const y = (i / width) | 0
+    push(x - 1, y)
+    push(x + 1, y)
+    push(x, y - 1)
+    push(x, y + 1)
+  }
 }
 
 /**
@@ -297,8 +370,10 @@ function extractInkMask(
     (darkish + lightish) / opaque > 0.82
 
   const t = Math.max(0, Math.min(100, sensitivity)) / 100
-  const inkCeil = lineArt ? 55 + t * 100 : 28 + t * 55
-  const contrastMin = lineArt ? 6 + (1 - t) * 14 : 14 + (1 - t) * 22
+  // Keep line-art ceil tight so anti-aliased stroke edges don't become solid ink
+  // (that was fattening every wall vs Vectorizer / our earlier thin die-lines).
+  const inkCeil = lineArt ? 32 + t * 48 : 28 + t * 55
+  const contrastMin = lineArt ? 10 + (1 - t) * 18 : 14 + (1 - t) * 22
 
   const mask = new Uint8Array(n)
   for (let y = 1; y < height - 1; y++) {
@@ -323,8 +398,8 @@ function extractInkMask(
       const nearBlack = L <= inkCeil * 0.55 && chromaAt(data, o) < 35
       const darkEdge = L <= inkCeil && contrast >= contrastMin
       const strongInk = L <= 22
-      // Pure line-art: any sufficiently dark low-chroma pixel is ink.
-      const lineInk = lineArt && L <= inkCeil && chromaAt(data, o) < 40
+      // Line art: only true dark ink — not mid-gray AA halos around strokes.
+      const lineInk = lineArt && L <= Math.min(inkCeil, 48) && chromaAt(data, o) < 28
 
       if (nearBlack || darkEdge || strongInk || lineInk) mask[i] = 255
     }
