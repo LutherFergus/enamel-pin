@@ -91,7 +91,7 @@ export function DualControls({
         />
       </div>
       <p className="hint">
-        Transparent PNG of ink die-lines only — not fuzzy photo edges or flooded fills.
+        Transparent die-line plate — metal-wall strokes only, not flooded black fills.
       </p>
 
       <h2>Color vector (SVG)</h2>

@@ -237,9 +237,15 @@ export default function App() {
     if (busy || isPending) return 'Building stroke outline and color vector…'
     if (error) return error
     if (!result) return 'Upload an image or generate one with AI'
+    if (viewMode === 'outline') {
+      return `Outline SVG · ${result.outline.widthPx}×${result.outline.heightPx} · ${result.outline.pathCount} paths · transparent`
+    }
+    if (viewMode === 'source') {
+      return 'Source artwork'
+    }
     const pmsCount = result.vector.palette.filter((c) => c.pmsCode).length
-    return `Outline SVG+PNG · ${result.vector.palette.length} fills · ${pmsCount} PMS · ${result.vector.regionCount} shapes`
-  }, [busy, error, isPending, result])
+    return `Vector SVG · ${result.vector.palette.length} fills · ${pmsCount} PMS · ${result.vector.regionCount} shapes`
+  }, [busy, error, isPending, result, viewMode])
 
   return (
     <div className="app">

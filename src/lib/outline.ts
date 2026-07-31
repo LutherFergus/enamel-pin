@@ -40,6 +40,8 @@ export type OutlineResult = {
   svgUrl: string
   widthPx: number
   heightPx: number
+  /** Potrace path count in the outline SVG. */
+  pathCount: number
 }
 
 function drawScaled(
@@ -84,16 +86,21 @@ export async function extractOutlinePng(
     // B&W / Vectorizer-style line art: preserve stroke weight — light clean only.
     mask = majorityClean(mask, w, h)
   } else {
-    // Morphological close reconnects broken knot/die-line gaps without flooding.
+    // Color pin art often has large black enamel fills. Hollow those into
+    // metal-wall strokes so Outline is a die-line plate, not a flooded silhouette.
+    // Thin strokes (< ~5px) survive intact; solid fills become perimeter walls.
+    mask = toStrokeWalls(mask, w, h, 2)
     mask = dilate(mask, w, h, 1)
-    mask = erode(mask, w, h, 1)
     mask = majorityClean(mask, w, h)
-    mask = majorityClean(mask, w, h)
+    mask = removeSmallComponents(mask, w, h, Math.max(10, Math.round(w * h * 0.00003)))
   }
 
   const thickness = Math.max(0, Math.min(6, Math.round(settings.thickness)))
   if (thickness > 0) {
     mask = dilate(mask, w, h, thickness)
+  } else if (!lineArt) {
+    // Default ~1px wall weight so die-lines stay readable after Potrace.
+    mask = dilate(mask, w, h, 1)
   }
 
   const stroke: Rgb = settings.invert
@@ -128,6 +135,7 @@ export async function extractOutlinePng(
 
   const svg = await maskToTransparentSvg(out, w, h, stroke)
   const svgBlob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' })
+  const pathCount = (svg.match(/<path\b/gi) || []).length
 
   return {
     pngBlob,
@@ -137,7 +145,26 @@ export async function extractOutlinePng(
     svgUrl: URL.createObjectURL(svgBlob),
     widthPx: w,
     heightPx: h,
+    pathCount,
   }
+}
+
+/**
+ * Morphological gradient: keep dark pixels that sit on the edge of a dark
+ * region. Solid black enamel → hollow wall; already-thin strokes → kept.
+ */
+function toStrokeWalls(
+  dark: Uint8Array,
+  w: number,
+  h: number,
+  radius: number,
+): Uint8Array {
+  const eroded = erode(dark, w, h, Math.max(1, radius))
+  const out = new Uint8Array(w * h)
+  for (let i = 0; i < w * h; i++) {
+    if (dark[i] && !eroded[i]) out[i] = 255
+  }
+  return out
 }
 
 /**
@@ -242,6 +269,7 @@ function extractInkMask(
   const lum = new Float32Array(n)
   let opaque = 0
   let darkish = 0
+  let lightish = 0
   let chromaSum = 0
 
   for (let i = 0; i < n; i++) {
@@ -254,12 +282,18 @@ function extractInkMask(
     const y = 0.2126 * data[o] + 0.7152 * data[o + 1] + 0.0722 * data[o + 2]
     lum[i] = y
     if (y < 70) darkish++
+    if (y > 200) lightish++
     chromaSum += chromaAt(data, o)
   }
 
   const avgChroma = opaque > 0 ? chromaSum / opaque : 0
-  // Line art: enough dark ink + low average chroma (B&W / near-B&W strokes).
-  const lineArt = opaque > 0 && darkish / opaque > 0.08 && avgChroma < 28
+  // Line art: bimodal dark+light, low chroma (B&W / near-B&W strokes).
+  // Color pins with black enamel fills must NOT take this path (they'd flood).
+  const lineArt =
+    opaque > 0 &&
+    avgChroma < 28 &&
+    darkish / opaque > 0.08 &&
+    (darkish + lightish) / opaque > 0.82
 
   const t = Math.max(0, Math.min(100, sensitivity)) / 100
   const inkCeil = lineArt ? 55 + t * 100 : 28 + t * 55
