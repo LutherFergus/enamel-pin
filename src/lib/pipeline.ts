@@ -35,6 +35,36 @@ export type DualOutputResult = {
   outline: OutlineResult
   vector: ColorVectorResult
   proof: ProofSvg
+  /** True until color vector finishes (outline may already be usable). */
+  vectorPending?: boolean
+}
+
+function yieldToUi(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => setTimeout(resolve, 0))
+  })
+}
+
+/** Empty vector placeholder so the UI can show outline before color finishes. */
+function placeholderVector(widthPx: number, heightPx: number): ColorVectorResult {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${widthPx} ${heightPx}" width="${widthPx}" height="${heightPx}"></svg>`
+  const svgBlob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' })
+  return {
+    svg,
+    svgBlob,
+    svgUrl: URL.createObjectURL(svgBlob),
+    widthPx,
+    heightPx,
+    palette: [],
+    regionCount: 0,
+    state: {
+      widthPx,
+      heightPx,
+      labels: new Uint16Array(0),
+      palette: [],
+      mergeMap: [],
+    },
+  }
 }
 
 export async function createDualOutputs(
@@ -42,20 +72,49 @@ export async function createDualOutputs(
   settings: DualOutputSettings,
   merges: Array<[number, number]> = [],
   overrides: PmsOverrides = {},
+  onOutlineReady?: (partial: DualOutputResult) => void,
 ): Promise<DualOutputResult> {
   const background = {
     enabled: settings.removeBackground,
     tolerance: settings.backgroundTolerance,
   }
-  const [outline, vector] = await Promise.all([
-    // Outline keeps its own gentle knockout (era when color count hit 32).
-    extractOutlinePng(source, settings.outline),
-    vectorizeColors(source, settings.vector, merges, overrides, background),
-  ])
-  return {
+
+  // Outline first — don't wait on the heavy color pass (detail 100 can hang phones).
+  await yieldToUi()
+  const outline = await extractOutlinePng(source, settings.outline)
+  await yieldToUi()
+
+  const pendingVector = placeholderVector(outline.widthPx, outline.heightPx)
+  const partial: DualOutputResult = {
     outline,
-    vector,
-    proof: composeProofSvg(vector.svg, outline.svg),
+    vector: pendingVector,
+    proof: composeProofSvg(pendingVector.svg, outline.svg),
+    vectorPending: true,
+  }
+  onOutlineReady?.(partial)
+
+  try {
+    await yieldToUi()
+    const vector = await vectorizeColors(
+      source,
+      settings.vector,
+      merges,
+      overrides,
+      background,
+    )
+    // Drop placeholder URLs.
+    URL.revokeObjectURL(pendingVector.svgUrl)
+    revokeProof(partial.proof)
+
+    return {
+      outline,
+      vector,
+      proof: composeProofSvg(vector.svg, outline.svg),
+      vectorPending: false,
+    }
+  } catch (err) {
+    // Keep outline usable even if color vector fails / OOMs.
+    throw err
   }
 }
 
@@ -68,6 +127,9 @@ export async function remergeVector(
   detailRetention = DEFAULT_COLOR_VECTOR_SETTINGS.detailRetention,
   pmsTolerance = DEFAULT_COLOR_VECTOR_SETTINGS.pmsTolerance,
 ): Promise<DualOutputResult> {
+  if (previous.vectorPending || previous.vector.palette.length === 0) {
+    return previous
+  }
   const { pathomitScale } = detailRetentionParams(detailRetention)
   const vector = await applyPaletteMerges(
     previous.vector.state,
@@ -83,6 +145,7 @@ export async function remergeVector(
     outline: previous.outline,
     vector,
     proof: composeProofSvg(vector.svg, previous.outline.svg),
+    vectorPending: false,
   }
 }
 

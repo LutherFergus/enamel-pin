@@ -128,9 +128,26 @@ export default function App() {
           nextSettings,
           nextMerges,
           nextOverrides,
+          (partial) => {
+            // Outline is ready — show it while color vector still runs.
+            startTransition(() => {
+              setResult((prev) => {
+                revokeDualUrls(prev)
+                return partial
+              })
+              if (!opts.preserveView) {
+                setViewMode('outline')
+              }
+            })
+          },
         )
         startTransition(() => {
           setResult((prev) => {
+            // `next` reuses the same outline object/URLs from `partial`.
+            // Placeholder vector/proof were already revoked inside createDualOutputs.
+            if (prev && prev.outline.svgUrl === next.outline.svgUrl) {
+              return next
+            }
             revokeDualUrls(prev)
             return next
           })
@@ -139,7 +156,10 @@ export default function App() {
           }
         })
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Processing failed')
+        // Keep any outline that already landed; surface the vector failure.
+        setError(
+          err instanceof Error ? err.message : 'Processing failed',
+        )
       } finally {
         setBusy(false)
       }
@@ -244,12 +264,20 @@ export default function App() {
   }, [result, sourceName])
 
   const statusText = useMemo(() => {
-    if (busy || isPending) return 'Building stroke outline and color vector…'
     if (error) return error
+    if (busy || isPending) {
+      if (result?.outline && result.vectorPending) {
+        return `Outline ready · ${result.outline.pathCount} paths — building color vector…`
+      }
+      return 'Building stroke outline…'
+    }
     if (!result) return 'Upload an image or generate one with AI'
     if (viewMode === 'source') return 'Original artwork'
     if (viewMode === 'outline') {
       return `Outline SVG · ${result.outline.widthPx}×${result.outline.heightPx} · ${result.outline.pathCount} paths · #000000`
+    }
+    if (result.vectorPending || result.vector.palette.length === 0) {
+      return `Outline ready · color vector still running or unavailable`
     }
     if (viewMode === 'proof') {
       const pmsCount = result.vector.palette.filter((c) => c.pmsCode).length
@@ -316,7 +344,7 @@ export default function App() {
             Browse PMS chart ({getPmsChartSize()})
           </button>
 
-          {result && (
+          {result && result.vector.palette.length > 0 && (
             <PaletteMerge
               palette={result.vector.palette}
               merges={merges}
@@ -331,7 +359,7 @@ export default function App() {
               type="button"
               className="btn btn-secondary"
               onClick={downloadProof}
-              disabled={!result || busy}
+              disabled={!result || busy || !!result.vectorPending || result.vector.palette.length === 0}
             >
               Download proof SVG
             </button>
@@ -339,7 +367,7 @@ export default function App() {
               type="button"
               className="btn btn-secondary"
               onClick={downloadOutlineSvg}
-              disabled={!result || busy}
+              disabled={!result}
             >
               Download outline SVG
             </button>
@@ -347,7 +375,7 @@ export default function App() {
               type="button"
               className="btn btn-secondary"
               onClick={downloadOutline}
-              disabled={!result || busy}
+              disabled={!result}
             >
               Download outline PNG
             </button>
@@ -355,7 +383,7 @@ export default function App() {
               type="button"
               className="btn btn-secondary"
               onClick={downloadVector}
-              disabled={!result || busy}
+              disabled={!result || busy || !!result.vectorPending || result.vector.palette.length === 0}
             >
               Download vector SVG
             </button>
@@ -378,7 +406,7 @@ export default function App() {
                   type="button"
                   className={`tab ${viewMode === 'vector' ? 'active' : ''}`}
                   onClick={() => setViewMode('vector')}
-                  disabled={!result}
+                  disabled={!result || !!result.vectorPending || result.vector.palette.length === 0}
                 >
                   Vector
                 </button>
@@ -394,7 +422,7 @@ export default function App() {
                   type="button"
                   className={`tab ${viewMode === 'proof' ? 'active' : ''}`}
                   onClick={() => setViewMode('proof')}
-                  disabled={!result}
+                  disabled={!result || !!result.vectorPending || result.vector.palette.length === 0}
                 >
                   Proof
                 </button>
