@@ -13,6 +13,11 @@ function roundInt(n: number) {
   return Math.round(n)
 }
 
+function formatPx(n: number) {
+  const v = Math.round(n * 100) / 100
+  return Number.isInteger(v) ? `${v}` : String(v)
+}
+
 export function DualControls({
   settings,
   onChange,
@@ -115,7 +120,7 @@ export function DualControls({
       <div className="field">
         <label>
           <span>Stroke thickness</span>
-          <span className="value">{roundInt(settings.outline.thickness)}px</span>
+          <span className="value">{formatPx(settings.outline.thickness)}px</span>
         </label>
         <input
           type="range"
@@ -124,13 +129,16 @@ export function DualControls({
           step="any"
           value={settings.outline.thickness}
           disabled={disabled}
-          onChange={(e) =>
-            patchOutline({ thickness: roundInt(Number(e.target.value)) })
-          }
+          onChange={(e) => {
+            const thickness =
+              Math.round(Math.max(0, Math.min(6, Number(e.target.value))) * 100) / 100
+            patchOutline({ thickness })
+          }}
         />
       </div>
       <p className="hint">
-        Transparent die-line plate — metal-wall strokes only, not flooded black fills.
+        Free 0–6px decimal. Extra wall weight after die-line extraction — metal-wall
+        strokes only, not flooded black fills.
       </p>
 
       <h2>Color vector (SVG)</h2>

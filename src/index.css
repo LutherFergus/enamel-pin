@@ -544,11 +544,47 @@ img {
   padding-top: 0.25rem;
 }
 
-.palette-merge-head {
+.palette-merge-toggle {
   display: flex;
+  width: 100%;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0.15rem 0;
+  cursor: pointer;
+  color: inherit;
+  text-align: left;
+}
+
+.palette-merge-toggle h2 {
+  margin: 0;
+}
+
+.palette-merge-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.palette-merge-chevron {
+  color: var(--metal);
+  font-size: 0.85rem;
+}
+
+.palette-merge-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 0.55rem;
 }
 
 .palette-merge-head h2 {

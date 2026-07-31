@@ -42,7 +42,8 @@ export function sanitizeSettings(raw: unknown): DualOutputSettings {
       base.outline.sensitivity = Math.max(0, Math.min(100, o.outline.sensitivity))
     }
     if (isFiniteNumber(o.outline.thickness)) {
-      base.outline.thickness = Math.max(0, Math.min(6, Math.round(o.outline.thickness)))
+      base.outline.thickness =
+        Math.round(Math.max(0, Math.min(6, o.outline.thickness)) * 100) / 100
     }
     if (typeof o.outline.invert === 'boolean') {
       base.outline.invert = o.outline.invert

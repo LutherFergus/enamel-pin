@@ -9,7 +9,7 @@ export type OutlineSettings = {
    * Higher = includes lighter hatches / thinner strokes.
    */
   sensitivity: number
-  /** Extra stroke thicken in pixels (0–6). Prefer 0–1 for clean Vectorizer-style die-lines. */
+  /** Extra stroke thicken in pixels (0–6, decimal). Prefer 0–1 for clean die-lines. */
   thickness: number
   /** Invert: white strokes on transparent instead of black. */
   invert: boolean
@@ -18,10 +18,10 @@ export type OutlineSettings = {
 }
 
 export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
-  sensitivity: 48,
+  sensitivity: 42,
   thickness: 0,
   invert: false,
-  maxDim: 1600,
+  maxDim: 1200,
 }
 
 let potraceReady: Promise<void> | null = null
@@ -57,8 +57,8 @@ function drawScaled(
   canvas.width = w
   canvas.height = h
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!
-  // No smoothing — anti-aliased greys fill thin white islands when thresholded.
-  ctx.imageSmoothingEnabled = false
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(source, 0, 0, w, h)
   return { canvas, ctx, w, h }
 }
@@ -80,14 +80,11 @@ export async function extractOutlinePng(
   let mask = rawMask
 
   // Drop tiny speck components (noise left of silhouettes, texture grit)
-  const minSpeck = lineArt
-    ? Math.max(4, Math.round(w * h * 0.000008))
-    : Math.max(12, Math.round(w * h * 0.00004))
-  mask = removeSmallComponents(mask, w, h, minSpeck)
+  mask = removeSmallComponents(mask, w, h, Math.max(12, Math.round(w * h * 0.00004)))
 
   if (lineArt) {
-    // Vectorizer-style B&W: never fill white islands (polka dots, spokes, face).
-    mask = removeIsolatedInk(mask, w, h)
+    // B&W / Vectorizer-style line art: preserve stroke weight — light clean only.
+    mask = majorityClean(mask, w, h)
   } else {
     // Color pin art often has large black enamel fills. Hollow those into
     // metal-wall strokes so Outline is a die-line plate, not a flooded silhouette.
@@ -98,18 +95,17 @@ export async function extractOutlinePng(
     mask = removeSmallComponents(mask, w, h, Math.max(10, Math.round(w * h * 0.00003)))
   }
 
-  const thickness = Math.max(0, Math.min(6, Math.round(settings.thickness)))
-  if (thickness > 0) {
+  const thickness = Math.max(0, Math.min(6, settings.thickness))
+  if (thickness >= 0.05) {
     mask = dilate(mask, w, h, thickness)
   } else if (!lineArt) {
     // Default ~1px wall weight so die-lines stay readable after Potrace.
     mask = dilate(mask, w, h, 1)
   }
 
-  // Soft enamel outline plate is always pure black (or white if inverted).
   const stroke: Rgb = settings.invert
     ? { r: 255, g: 255, b: 255 }
-    : { r: 0, g: 0, b: 0 }
+    : { r: 12, g: 10, b: 9 }
 
   const out = ctx.createImageData(w, h)
   for (let i = 0; i < w * h; i++) {
@@ -173,7 +169,7 @@ function toStrokeWalls(
 
 /**
  * Potrace the ink mask into smooth cubic Bezier paths on a fully transparent SVG.
- * Tuned toward Vectorizer.AI-style die-lines: no backdrop rect, fill #000000.
+ * Tuned toward Vectorizer.AI-style die-lines: no backdrop rect, fill #0c0a09-class ink.
  *
  * Note: pathonly mode omits Potrace's y-flip/scale transform, so we keep the full SVG
  * and restyle it (fill + dimensions) instead of rebuilding path coordinates.
@@ -186,35 +182,39 @@ async function maskToTransparentSvg(
 ): Promise<string> {
   await ensurePotrace()
 
-  // Supersample fattens 1px strokes via nearest-neighbor — skip it so thin
-  // Vectorizer-style walls and white islands stay faithful.
-  const tw = w
-  const th = h
+  // Mild supersample for denser curve fits; viewBox stays at tw×th, displayed at w×h.
+  const superScale = 2
+  const tw = w * superScale
+  const th = h * superScale
   const bw = new ImageData(tw, th)
 
-  for (let i = 0; i < w * h; i++) {
-    const si = i * 4
-    const di = i * 4
-    const on = imageData.data[si + 3] >= 128
-    const v = on ? 0 : 255
-    bw.data[di] = v
-    bw.data[di + 1] = v
-    bw.data[di + 2] = v
-    bw.data[di + 3] = 255
+  for (let y = 0; y < th; y++) {
+    const sy = Math.min(h - 1, (y / superScale) | 0)
+    for (let x = 0; x < tw; x++) {
+      const sx = Math.min(w - 1, (x / superScale) | 0)
+      const si = (sy * w + sx) * 4
+      const di = (y * tw + x) * 4
+      const on = imageData.data[si + 3] >= 128
+      // Potrace expects dark foreground on light background.
+      const v = on ? 0 : 255
+      bw.data[di] = v
+      bw.data[di + 1] = v
+      bw.data[di + 2] = v
+      bw.data[di + 3] = 255
+    }
   }
 
   const inkHex = `#${[ink.r, ink.g, ink.b]
     .map((v) => v.toString(16).padStart(2, '0'))
     .join('')}`
 
-  // Keep turdsize low so fine black details survive; white holes are topology.
-  const turdsize = Math.max(2, Math.round(tw * th * 0.000004))
+  const turdsize = Math.max(3, Math.round(tw * th * 0.000012))
   const traced = await potrace(bw, {
     turdsize,
     turnpolicy: 4,
-    alphamax: 0.88,
+    alphamax: 0.92,
     opticurve: 1,
-    opttolerance: 0.2,
+    opttolerance: 0.24,
     pathonly: false,
     extractcolors: false,
   })
@@ -430,34 +430,16 @@ function majorityClean(mask: Uint8Array, w: number, h: number): Uint8Array {
   return out
 }
 
-/** Drop speck ink only — never fill white holes (polka dots, spokes, face gaps). */
-function removeIsolatedInk(mask: Uint8Array, w: number, h: number): Uint8Array {
-  const out = new Uint8Array(mask)
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      const i = y * w + x
-      if (!mask[i]) continue
-      let on = 0
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (mask[(y + dy) * w + (x + dx)]) on++
-        }
-      }
-      if (on <= 2) out[i] = 0
-    }
-  }
-  return out
-}
-
 function dilate(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
-  if (radius <= 0) return mask
+  if (radius < 0.05) return mask
   const out = new Uint8Array(mask)
+  const rCeil = Math.max(1, Math.ceil(radius))
   const r2 = radius * radius
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       if (!mask[y * w + x]) continue
-      for (let dy = -radius; dy <= radius; dy++) {
-        for (let dx = -radius; dx <= radius; dx++) {
+      for (let dy = -rCeil; dy <= rCeil; dy++) {
+        for (let dx = -rCeil; dx <= rCeil; dx++) {
           if (dx * dx + dy * dy > r2) continue
           const nx = x + dx
           const ny = y + dy
@@ -471,15 +453,16 @@ function dilate(mask: Uint8Array, w: number, h: number, radius: number): Uint8Ar
 }
 
 function erode(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
-  if (radius <= 0) return mask
+  const r = Math.max(1, Math.round(radius))
+  if (r <= 0) return mask
   const out = new Uint8Array(w * h)
-  for (let y = radius; y < h - radius; y++) {
-    for (let x = radius; x < w - radius; x++) {
+  for (let y = r; y < h - r; y++) {
+    for (let x = r; x < w - r; x++) {
       if (!mask[y * w + x]) continue
       let keep = true
-      for (let dy = -radius; dy <= radius && keep; dy++) {
-        for (let dx = -radius; dx <= radius; dx++) {
-          if (dx * dx + dy * dy > radius * radius) continue
+      for (let dy = -r; dy <= r && keep; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (dx * dx + dy * dy > r * r) continue
           if (!mask[(y + dy) * w + (x + dx)]) {
             keep = false
             break
