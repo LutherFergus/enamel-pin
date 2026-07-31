@@ -1,4 +1,5 @@
 import { removeBackground, type RemoveBgOptions } from './background'
+import { isFlatDigitalArt, scrubAntiAliasFringe } from './flatArt'
 import { dropSpeckIslands, overlapAdjacentFills, smoothLabelBoundaries } from './labelSmooth'
 import {
   deltaE76,
@@ -190,8 +191,8 @@ export function autoMergeCloseColors(
   // Same nearest PMS merges a bit more eagerly than raw Lab pairs.
   const samePmsGate = Math.max(tolerance, 6)
   // Near-identical enamel flats (two reds / two oranges) collapse even when
-  // the slider is modest — ΔE~6–10 is still one die color on metal.
-  const sameHueGate = Math.max(tolerance, 9)
+  // the slider is modest — ΔE~8–16 is still one die color on metal.
+  const sameHueGate = Math.max(tolerance + 4, 16)
 
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
@@ -537,27 +538,41 @@ export async function vectorizeColors(
   const imageData = scaleToCanvas(source, settings.maxDim)
   // Product-photo backdrops must not become the "primary" palette color.
   removeBackground(imageData, background)
+  // Kill muddy AA fringe between black outlines and flat fills before palette.
+  scrubAntiAliasFringe(imageData)
+  scrubAntiAliasFringe(imageData)
+
+  const flat = isFlatDigitalArt(imageData)
   const { width, height } = imageData
   const detail = detailRetentionParams(settings.detailRetention)
-  const palette = extractPalette(imageData, settings.colorCount)
-  let labels = quantizeImage(imageData, palette)
-  labels = denoiseLabels(labels, width, height, detail.denoisePasses)
+  // Flat clipart needs harder cleanup than soft-shaded art — speckles in white
+  // foam/apron are the main "horrible vs original" failure mode.
+  const denoisePasses = flat ? Math.max(detail.denoisePasses, 3) : detail.denoisePasses
+  const boundaryPasses = flat ? Math.max(detail.boundaryPasses, 3) : detail.boundaryPasses
+  const speckMin = flat
+    ? Math.max(28, Math.round(width * height * 0.00008))
+    : Math.max(12, Math.round(width * height * detail.minRegionRatio * detail.speckScale))
+  const minArea = flat
+    ? Math.max(24, Math.round(width * height * Math.max(detail.minRegionRatio, 0.0002)))
+    : Math.max(8, Math.round(width * height * detail.minRegionRatio))
 
-  const minArea = Math.max(
-    8,
-    Math.round(width * height * detail.minRegionRatio),
-  )
+  const palette = extractPalette(imageData, settings.colorCount, 1, flat)
+  let labels = quantizeImage(imageData, palette)
+  labels = denoiseLabels(labels, width, height, denoisePasses)
   labels = mergeSmallRegions(labels, width, height, minArea)
-  // Round off pixel stairs on region boundaries before spline fitting.
-  labels = smoothLabelBoundaries(labels, width, height, detail.boundaryPasses)
-  labels = dropSpeckIslands(
-    labels,
-    width,
-    height,
-    Math.max(12, Math.round(minArea * detail.speckScale)),
-  )
-  if (detail.boundaryPasses > 1) {
-    labels = smoothLabelBoundaries(labels, width, height, 1)
+  labels = smoothLabelBoundaries(labels, width, height, boundaryPasses)
+  labels = dropSpeckIslands(labels, width, height, speckMin)
+  if (boundaryPasses > 1) {
+    labels = smoothLabelBoundaries(labels, width, height, flat ? 2 : 1)
+  }
+  if (flat) {
+    // Second speck pass after boundary smooth — catches leftover foam grit.
+    labels = dropSpeckIslands(
+      labels,
+      width,
+      height,
+      Math.max(18, Math.round(speckMin * 0.7)),
+    )
   }
   // Overlap abutting fills so vector paths seal (no checkerboard hairlines).
   labels = overlapAdjacentFills(labels, width, height)
@@ -566,7 +581,7 @@ export async function vectorizeColors(
   const autoMerges = autoMergeCloseColors(
     palette,
     areas,
-    settings.pmsTolerance,
+    flat ? Math.max(settings.pmsTolerance, 14) : settings.pmsTolerance,
     settings.snapToPms,
   )
   const allMerges = combineMerges(palette.length, autoMerges, merges)
@@ -579,7 +594,7 @@ export async function vectorizeColors(
     mergedPalette,
     width,
     height,
-    settings.smoothness,
+    flat ? Math.max(settings.smoothness, 4) : settings.smoothness,
     settings.snapToPms,
     overrides,
     {
@@ -589,8 +604,8 @@ export async function vectorizeColors(
       palette,
       mergeMap,
     },
-    detail.pathomitScale,
-    settings.pmsTolerance,
+    flat ? Math.max(detail.pathomitScale, 1.1) : detail.pathomitScale,
+    flat ? Math.max(settings.pmsTolerance, 14) : settings.pmsTolerance,
     disabledColors,
   )
 }

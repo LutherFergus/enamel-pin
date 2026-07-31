@@ -66,6 +66,7 @@ export function extractPalette(
   imageData: ImageData,
   colorCount: number,
   sampleStep = 1,
+  flatArt = false,
 ): Rgb[] {
   const target = Math.max(2, Math.min(colorCount, 32))
   const { data, width, height } = imageData
@@ -198,6 +199,7 @@ export function extractPalette(
 
   // 2) Subject accents + skin BEFORE majority neutrals (~55% of slots).
   const accentSlots = Math.max(3, Math.round(target * 0.55))
+  const accentMinDist = flatArt ? 44 : 34
   const accents = [...bins].sort((a, b) => {
     const La = luminance(a)
     const Lb = luminance(b)
@@ -218,40 +220,43 @@ export function extractPalette(
   for (const bin of accents) {
     if (selected.length >= Math.min(target, 2 + accentSlots)) break
     if (!isAccent(bin) && bin.skin < 0.1) continue
-    tryAdd(bin, 34)
+    tryAdd(bin, accentMinDist)
   }
 
   // 3) Shade companions for accents (dark red under bright red, etc.).
-  for (const bin of bins) {
-    if (selected.length >= target) break
-    if (bin.chroma < 32) continue
-    // Prefer darker/lighter sibling of an already-selected accent hue family.
-    const related = selected.some((s) => {
-      if (s.chroma < 32) return false
-      const hueDist =
-        Math.abs(s.r - bin.r) + Math.abs(s.g - bin.g) + Math.abs(s.b - bin.b)
-      const lumGap = Math.abs(luminance(s) - luminance(bin))
-      return hueDist < 160 && lumGap > 25 && lumGap < 120
-    })
-    if (!related) continue
-    tryAdd(bin, 32)
+  // Flat clipart is already flat enamel — skip shade ladders (they become
+  // duplicate reds / muddy browns vs the original).
+  if (!flatArt) {
+    for (const bin of bins) {
+      if (selected.length >= target) break
+      if (bin.chroma < 32) continue
+      const related = selected.some((s) => {
+        if (s.chroma < 32) return false
+        const hueDist =
+          Math.abs(s.r - bin.r) + Math.abs(s.g - bin.g) + Math.abs(s.b - bin.b)
+        const lumGap = Math.abs(luminance(s) - luminance(bin))
+        return hueDist < 160 && lumGap > 25 && lumGap < 120
+      })
+      if (!related) continue
+      tryAdd(bin, 38)
+    }
   }
 
   // 4) Remaining — chromatic bins first, then neutrals under cap.
   for (const bin of bins) {
     if (selected.length >= target) break
     if (isNeutral(bin) && bin.skin < 0.08) continue
-    tryAdd(bin, 30)
+    tryAdd(bin, flatArt ? 40 : 30)
   }
   for (const bin of bins) {
     if (selected.length >= target) break
-    tryAdd(bin, 28)
+    tryAdd(bin, flatArt ? 36 : 28)
   }
 
   // Fill if accent-first left gaps (rare).
   for (const bin of bins) {
     if (selected.length >= target) break
-    tryAdd(bin, 24)
+    tryAdd(bin, flatArt ? 32 : 24)
   }
 
   // Order: importance score first so PMS snap / UI show subject colors early,
@@ -444,7 +449,7 @@ export function quantizeImage(imageData: ImageData, palette: Rgb[]): Uint16Array
       continue
     }
     // Snap drawn outline ink straight to metal black — stops navy/brown fringes.
-    if (luminance(pixel) <= 26 && chroma(pixel) < 30 && blackLum < 40) {
+    if (luminance(pixel) <= 32 && chroma(pixel) < 34 && blackLum < 45) {
       labels[i] = blackIdx
       continue
     }
