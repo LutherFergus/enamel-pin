@@ -141,8 +141,8 @@ export function DualControls({
         />
       </div>
       <p className="hint">
-        Majority colors first (primary → secondary → tertiary accents), up to 32.
-        Keeps vivid detail colors instead of averaging them into muted midtones.
+        Subject-aware colors (skin, reds, accents) before majority grays — matching
+        Vectorizer/VectorQ priority, up to 32 fills.
       </p>
 
       <label className="check-row">

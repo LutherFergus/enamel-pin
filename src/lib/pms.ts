@@ -145,7 +145,16 @@ export function snapPaletteToPms(
     }
 
     used.add(chosen.pms.code)
-    const useSource = chosen.deltaE > maxDeltaE
+
+    const srcChroma =
+      Math.max(color.r, color.g, color.b) - Math.min(color.r, color.g, color.b)
+    const pmsChroma =
+      Math.max(chosen.pms.r, chosen.pms.g, chosen.pms.b) -
+      Math.min(chosen.pms.r, chosen.pms.g, chosen.pms.b)
+    // Never mute skin/accent hues into a flat gray PMS swatch.
+    const wouldMuteAccent = srcChroma >= 40 && pmsChroma < srcChroma * 0.55
+    const useSource = chosen.deltaE > maxDeltaE || wouldMuteAccent
+
     out[index] = {
       rgb: useSource
         ? { r: color.r, g: color.g, b: color.b }
