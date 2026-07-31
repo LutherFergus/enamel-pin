@@ -66,6 +66,9 @@ export async function cleanupProofDominantCells(
   let { cellLabels, fillRgb, metaByIndex, cellsFixed, cellCount } =
     floodDominantInCells(data, ink, w, h, palette)
 
+  // Clear pockets inside the figure (outline gaps, missing fills) → surrounding color.
+  cellLabels = fillEnclosedTransparent(cellLabels, data, ink, w, h)
+
   // Round pixel stairs before curve fitting.
   cellLabels = smoothLabelBoundaries(cellLabels, w, h, 4)
   cellLabels = dropSpeckIslands(
@@ -74,6 +77,8 @@ export async function cleanupProofDominantCells(
     h,
     Math.max(10, Math.round(w * h * 0.00002)),
   )
+  // Speck drop can reopen holes — fill again.
+  cellLabels = fillEnclosedTransparent(cellLabels, data, ink, w, h)
   cellLabels = smoothLabelBoundaries(cellLabels, w, h, 2)
 
   // Potrace cubics — crisp enamel curves (not ImageTracer stair-waves).
@@ -339,6 +344,144 @@ function floodDominantInCells(
     cellsFixed,
     cellCount,
   }
+}
+
+/**
+ * Fill transparent pockets that sit inside the subject with the dominant
+ * neighboring enamel color. Seals silhouette gaps first so "holes" connected
+ * to the outside through a broken outline still count as interior.
+ */
+function fillEnclosedTransparent(
+  labels: Uint16Array,
+  data: Uint8ClampedArray,
+  ink: Uint8Array,
+  w: number,
+  h: number,
+): Uint16Array {
+  const n = w * h
+  const out = new Uint16Array(labels)
+
+  // Subject = metal walls + already-labeled enamel + opaque proof pixels.
+  const subject = new Uint8Array(n)
+  for (let i = 0; i < n; i++) {
+    if (ink[i] || out[i] !== 0xffff || data[i * 4 + 3] > CLEAR_ALPHA) {
+      subject[i] = 255
+    }
+  }
+  // Close modest silhouette gaps (~8px) so interior clear isn't "outside".
+  const sealed = closeMask(subject, w, h, 4)
+
+  const exterior = new Uint8Array(n)
+  const stack: number[] = []
+  const pushExt = (i: number) => {
+    if (i < 0 || i >= n) return
+    if (sealed[i] || exterior[i]) return
+    exterior[i] = 1
+    stack.push(i)
+  }
+  for (let x = 0; x < w; x++) {
+    pushExt(x)
+    pushExt((h - 1) * w + x)
+  }
+  for (let y = 0; y < h; y++) {
+    pushExt(y * w)
+    pushExt(y * w + (w - 1))
+  }
+  while (stack.length) {
+    const i = stack.pop()!
+    const x = i % w
+    const y = (i / w) | 0
+    if (x > 0) pushExt(i - 1)
+    if (x + 1 < w) pushExt(i + 1)
+    if (y > 0) pushExt(i - w)
+    if (y + 1 < h) pushExt(i + w)
+  }
+
+  const seen = new Uint8Array(n)
+  for (let seed = 0; seed < n; seed++) {
+    // Unlabeled, not metal, inside the sealed subject hull.
+    if (out[seed] !== 0xffff || ink[seed] || exterior[seed] || seen[seed]) {
+      continue
+    }
+
+    const hole: number[] = []
+    stack.length = 0
+    stack.push(seed)
+    seen[seed] = 1
+
+    while (stack.length) {
+      const i = stack.pop()!
+      hole.push(i)
+      const x = i % w
+      const y = (i / w) | 0
+      for (const ni of [
+        x > 0 ? i - 1 : -1,
+        x + 1 < w ? i + 1 : -1,
+        y > 0 ? i - w : -1,
+        y + 1 < h ? i + w : -1,
+      ]) {
+        if (ni < 0) continue
+        if (seen[ni] || ink[ni] || exterior[ni]) continue
+        if (out[ni] !== 0xffff) continue
+        seen[ni] = 1
+        stack.push(ni)
+      }
+    }
+
+    const fill = dominantNeighborLabel(out, ink, hole, w, h)
+    if (fill === 0xffff) continue
+    for (const i of hole) out[i] = fill
+  }
+
+  return out
+}
+
+/** Majority labeled neighbor around a hole; searches outward if only ink borders it. */
+function dominantNeighborLabel(
+  labels: Uint16Array,
+  ink: Uint8Array,
+  hole: number[],
+  w: number,
+  h: number,
+): number {
+  const holeSet = new Set(hole)
+  const hist = new Map<number, number>()
+
+  const tallyAround = (radius: number) => {
+    hist.clear()
+    for (const i of hole) {
+      const x0 = i % w
+      const y0 = (i / w) | 0
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (dx === 0 && dy === 0) continue
+          const x = x0 + dx
+          const y = y0 + dy
+          if (x < 0 || y < 0 || x >= w || y >= h) continue
+          const ni = y * w + x
+          if (holeSet.has(ni) || ink[ni]) continue
+          const lab = labels[ni]
+          if (lab === 0xffff) continue
+          hist.set(lab, (hist.get(lab) ?? 0) + 1)
+        }
+      }
+    }
+  }
+
+  for (const radius of [1, 2, 4, 8, 14]) {
+    tallyAround(radius)
+    if (hist.size === 0) continue
+    let best = 0xffff
+    let bestN = 0
+    for (const [lab, n] of hist) {
+      if (n > bestN) {
+        bestN = n
+        best = lab
+      }
+    }
+    if (best !== 0xffff) return best
+  }
+  return 0xffff
 }
 
 /**
