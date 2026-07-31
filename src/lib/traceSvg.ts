@@ -248,21 +248,23 @@ export async function labelsToCrispSvg(
     }
 
     const traced = await potrace(bw, {
-      turdsize: turdsize * scale * scale,
+      turdsize: Math.max(4, turdsize * scale * scale),
       turnpolicy: 4,
-      // Round corners aggressively for soft-enamel look.
       alphamax: 1.0,
       opticurve: 1,
-      // Merge more segments → fewer nodes, smoother arcs.
-      opttolerance: 0.4,
+      opttolerance: 0.42,
       pathonly: false,
       extractcolors: false,
     })
 
-    const inner = extractPotracePaths(String(traced), fill, pmsAttr, 1 / scale)
-    if (inner.markup) {
-      pending.push({ markup: inner.markup, area: inner.area })
-    }
+    const inner = extractPotraceColorGroup(String(traced), fill, pmsAttr)
+    if (!inner.markup) continue
+
+    // Outer scale maps 2× Potrace space back into the art viewBox.
+    pending.push({
+      markup: `<g transform="scale(${1 / scale})">${inner.markup}</g>`,
+      area: inner.area / (scale * scale),
+    })
   }
 
   pending.sort((a, b) => b.area - a.area)
@@ -272,50 +274,43 @@ export async function labelsToCrispSvg(
   return { svg: parts.join('\n'), pathCount: pending.length }
 }
 
-/**
- * Pull <path> elements from a Potrace SVG, recolor, and scale coordinates
- * from supersampled space back to art pixels.
- */
-function extractPotracePaths(
+/** Recolor Potrace paths; keep the native y-flip transform untouched. */
+function extractPotraceColorGroup(
   svg: string,
   fill: string,
   pmsAttr: string,
-  coordScale: number,
 ): { markup: string; area: number } {
-  let s = svg
+  const s = svg
     .replace(/<\?xml[^>]*>/i, '')
     .replace(/<!DOCTYPE[^>]*>/i, '')
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/<rect\b[^>]*\/?>/gi, '')
     .trim()
 
-  // Potrace wraps paths in a y-flip group: translate(0,H) scale(0.1,-0.1)
-  const gMatch = s.match(/<g\b([^>]*)>([\s\S]*)<\/g>/i)
-  const gAttrs = gMatch?.[1] ?? ''
-  let body = gMatch?.[2] ?? s
+  const gMatch =
+    s.match(/<g\b([^>]*)>([\s\S]*)<\/g>\s*<\/svg>/i) ||
+    s.match(/<g\b([^>]*)>([\s\S]*)<\/g>/i)
+  if (!gMatch) return { markup: '', area: 0 }
 
-  const transform = gAttrs.match(/transform="([^"]*)"/i)?.[1] ?? ''
-  // Scale the existing transform so supersampled coords map to art size.
-  const extra =
-    coordScale !== 1 ? ` scale(${coordScale})` : ''
-  const combinedTransform = `${transform}${extra}`.trim()
+  const gAttrs = gMatch[1]
+  const body = gMatch[2]
+  const transform = gAttrs.match(/transform="([^"]*)"/i)?.[1]
 
-  const paths = [...body.matchAll(/<path\b[^>]*>/gi)].map((m) => m[0])
+  const paths = [...body.matchAll(/<path\b[^>]*\/?>/gi)].map((m) => m[0])
   if (!paths.length) return { markup: '', area: 0 }
 
+  const seam = 2.4 // in supersampled px; halved by outer scale(0.5)
   const restyled = paths
-    .map((p) =>
-      p
+    .map((p) => {
+      const open = p
         .replace(/\sfill="[^"]*"/gi, '')
         .replace(/\sstroke="[^"]*"/gi, '')
-        .replace(/\/?>$/, '')
-        .concat(
-          ` fill="${fill}" fill-rule="evenodd" stroke="${fill}" stroke-width="${(1.1 / Math.max(coordScale, 0.5)).toFixed(2)}" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke fill"${pmsAttr} />`,
-        ),
-    )
+        .replace(/\sfill-rule="[^"]*"/gi, '')
+        .replace(/\s?\/?>$/, '')
+      return `${open} fill="${fill}" fill-rule="evenodd" stroke="${fill}" stroke-width="${seam.toFixed(2)}" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke fill"${pmsAttr} />`
+    })
     .join('\n')
 
-  // Rough area from path count × canvas — sort order still prefers earlier large colors via caller sort on this.
   let area = 0
   for (const m of body.matchAll(/\bd="([^"]*)"/gi)) {
     const nums = m[1].match(/-?\d+\.?\d*/g)
@@ -327,19 +322,16 @@ function extractPotracePaths(
       ys.push(Number(nums[i + 1]))
     }
     if (!xs.length) continue
-    const minX = Math.min(...xs)
-    const maxX = Math.max(...xs)
-    const minY = Math.min(...ys)
-    const maxY = Math.max(...ys)
-    area += Math.max(0, maxX - minX) * Math.max(0, maxY - minY)
+    area +=
+      Math.max(0, Math.max(...xs) - Math.min(...xs)) *
+      Math.max(0, Math.max(...ys) - Math.min(...ys))
   }
-  area *= coordScale * coordScale
 
-  const markup = combinedTransform
-    ? `<g transform="${combinedTransform}" fill="${fill}">${restyled}</g>`
-    : restyled
-
-  return { markup, area: area || paths.length }
+  const transformAttr = transform ? ` transform="${transform}"` : ''
+  return {
+    markup: `<g${transformAttr} fill="${fill}">${restyled}</g>`,
+    area: area || paths.length,
+  }
 }
 
 function renderFlat(
