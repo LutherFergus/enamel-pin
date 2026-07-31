@@ -37,7 +37,7 @@ export function sanitizeSettings(raw: unknown): DualOutputSettings {
 
   if (o.vector && typeof o.vector === 'object') {
     if (isFiniteNumber(o.vector.colorCount)) {
-      base.vector.colorCount = Math.max(4, Math.min(18, Math.round(o.vector.colorCount)))
+      base.vector.colorCount = Math.max(4, Math.min(32, Math.round(o.vector.colorCount)))
     }
     if (isFiniteNumber(o.vector.minRegionRatio)) {
       base.vector.minRegionRatio = Math.max(0.00005, Math.min(0.01, o.vector.minRegionRatio))

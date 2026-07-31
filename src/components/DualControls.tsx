@@ -91,7 +91,7 @@ export function DualControls({
         <input
           type="range"
           min={4}
-          max={18}
+          max={32}
           step={1}
           value={settings.vector.colorCount}
           disabled={disabled}
@@ -99,8 +99,8 @@ export function DualControls({
         />
       </div>
       <p className="hint">
-        Majority colors first (primary → secondary → tertiary accents). Keeps vivid detail
-        colors instead of averaging them into muted midtones.
+        Majority colors first (primary → secondary → tertiary accents), up to 32.
+        Keeps vivid detail colors instead of averaging them into muted midtones.
       </p>
 
       <label className="check-row">
