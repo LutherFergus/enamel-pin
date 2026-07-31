@@ -79,20 +79,18 @@ export async function extractOutlinePng(
   const { mask: rawMask, lineArt } = extractInkMask(imageData, settings.sensitivity)
   let mask = rawMask
 
-  // Drop tiny speck components (noise left of silhouettes, texture grit)
+  // Drop tiny speck components (noise left of silhouettes, texture grit).
+  // Line art keeps very small ink flecks (polka-dot rim ticks, hatch ends).
   const minSpeck = lineArt
-    ? Math.max(4, Math.round(w * h * 0.000008))
+    ? Math.max(2, Math.round(w * h * 0.000002))
     : Math.max(12, Math.round(w * h * 0.00004))
   mask = removeSmallComponents(mask, w, h, minSpeck)
 
   if (lineArt) {
     // Vectorizer-style B&W: never fill white islands (polka dots, spokes, face).
+    // Only strip true 1-neighbor grit — 2-neighbor pixels are often micro-strokes
+    // around polka dots that we must keep.
     mask = removeIsolatedInk(mask, w, h)
-    // At high detail, AA bridges between parallel strokes can clump lines —
-    // open 1px ink bridges so white gaps stay open.
-    if (settings.sensitivity >= 70) {
-      mask = breakInkBridges(mask, w, h)
-    }
   } else {
     // Color pin art often has large black enamel fills. Hollow those into
     // metal-wall strokes so Outline is a die-line plate, not a flooded silhouette.
@@ -212,14 +210,14 @@ async function maskToTransparentSvg(
     .map((v) => v.toString(16).padStart(2, '0'))
     .join('')}`
 
-  // Keep turdsize low so fine black details survive; white holes are topology.
-  const turdsize = Math.max(2, Math.round(tw * th * 0.000004))
+  // Keep turdsize tiny so polka-rim flecks and fine hatch ticks survive Potrace.
+  const turdsize = Math.max(1, Math.round(tw * th * 0.0000015))
   const traced = await potrace(bw, {
     turdsize,
     turnpolicy: 4,
-    alphamax: 0.88,
+    alphamax: 0.85,
     opticurve: 1,
-    opttolerance: 0.2,
+    opttolerance: 0.18,
     pathonly: false,
     extractcolors: false,
   })
@@ -339,8 +337,17 @@ function extractInkMask(
         L <= inkCeil &&
         contrast >= contrastMin + 6 &&
         ch < 28
+      // Micro ticks around white islands (polka rims): high contrast to nearby white,
+      // even when the mark itself is only a few mid-dark pixels.
+      const microRim =
+        lineArt &&
+        L <= 95 &&
+        contrast >= 30 &&
+        ch < 40
 
-      if (nearBlack || strongInk || darkCore || darkEdge || aaEdge) mask[i] = 255
+      if (nearBlack || strongInk || darkCore || darkEdge || aaEdge || microRim) {
+        mask[i] = 255
+      }
     }
   }
 
@@ -445,7 +452,7 @@ function majorityClean(mask: Uint8Array, w: number, h: number): Uint8Array {
   return out
 }
 
-/** Drop speck ink only — never fill white holes (polka dots, spokes, face gaps). */
+/** Drop true single-pixel grit only — keep 2-neighbor micro-strokes (polka rims). */
 function removeIsolatedInk(mask: Uint8Array, w: number, h: number): Uint8Array {
   const out = new Uint8Array(mask)
   for (let y = 1; y < h - 1; y++) {
@@ -458,29 +465,7 @@ function removeIsolatedInk(mask: Uint8Array, w: number, h: number): Uint8Array {
           if (mask[(y + dy) * w + (x + dx)]) on++
         }
       }
-      if (on <= 2) out[i] = 0
-    }
-  }
-  return out
-}
-
-/**
- * Remove 1px ink bridges that glue parallel strokes together (common when
- * high detail thresholds treat anti-aliased mid-gray as solid ink).
- */
-function breakInkBridges(mask: Uint8Array, w: number, h: number): Uint8Array {
-  const out = new Uint8Array(mask)
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      const i = y * w + x
-      if (!mask[i]) continue
-      const L = mask[i - 1]
-      const R = mask[i + 1]
-      const U = mask[i - w]
-      const D = mask[i + w]
-      const hBridge = L && R && !U && !D
-      const vBridge = U && D && !L && !R
-      if (hBridge || vBridge) out[i] = 0
+      if (on <= 1) out[i] = 0
     }
   }
   return out
