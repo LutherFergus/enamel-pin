@@ -17,6 +17,38 @@ function readBody(req: Connect.IncomingMessage): Promise<Buffer> {
 function attachScreenshotApi(middlewares: Connect.Server) {
   fs.mkdirSync(SCREENSHOT_DIR, { recursive: true })
 
+  // Serve local review screenshots for benches / QA (dev + preview).
+  middlewares.use((req, res, next) => {
+    const pathname = req.url?.split('?')[0] || ''
+    if (!pathname.startsWith('/review-screenshots/') || req.method !== 'GET') {
+      next()
+      return
+    }
+    const rel = decodeURIComponent(pathname.replace(/^\/review-screenshots\//, ''))
+    if (!rel || rel.includes('..') || path.isAbsolute(rel)) {
+      res.statusCode = 400
+      res.end('bad path')
+      return
+    }
+    const filePath = path.join(SCREENSHOT_DIR, rel)
+    if (!filePath.startsWith(SCREENSHOT_DIR) || !fs.existsSync(filePath)) {
+      res.statusCode = 404
+      res.end('not found')
+      return
+    }
+    const ext = path.extname(filePath).toLowerCase()
+    const type =
+      ext === '.svg'
+        ? 'image/svg+xml'
+        : ext === '.jpg' || ext === '.jpeg'
+          ? 'image/jpeg'
+          : 'image/png'
+    res.statusCode = 200
+    res.setHeader('Content-Type', type)
+    res.setHeader('Cache-Control', 'no-store')
+    fs.createReadStream(filePath).pipe(res)
+  })
+
   middlewares.use(async (req, res, next) => {
     if (req.url?.split('?')[0] !== '/api/screenshot' || req.method !== 'POST') {
       next()
@@ -172,6 +204,9 @@ export default defineConfig({
   // GitHub Pages project site: https://lutherfergus.github.io/mosaic-image-creator/
   base: process.env.GITHUB_PAGES === '1' ? '/mosaic-image-creator/' : '/',
   plugins: [react(), imageGenProxy()],
+  optimizeDeps: {
+    exclude: ['esm-potrace-wasm'],
+  },
   server: {
     host: true,
     port: 5173,
