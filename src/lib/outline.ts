@@ -66,6 +66,9 @@ function drawScaled(
 /**
  * Soft-enamel die-line outline as transparent PNG + transparent SVG.
  * SVG has no background rectangle — only ink geometry on clear.
+ *
+ * Line-art path matches the detail-black / imaengine polka reference:
+ * preserve fills+holes, light speck cleanup, Potrace without supersample.
  */
 export async function extractOutlinePng(
   source: HTMLImageElement | ImageBitmap,
@@ -79,28 +82,41 @@ export async function extractOutlinePng(
   const { mask: rawMask, lineArt } = extractInkMask(imageData, settings.sensitivity)
   let mask = rawMask
 
-  // Drop tiny speck components (noise left of silhouettes, texture grit).
-  // Line art keeps very small ink flecks (polka-dot rim ticks, hatch ends).
-  const minSpeck = lineArt
-    ? Math.max(2, Math.round(w * h * 0.000002))
-    : Math.max(12, Math.round(w * h * 0.00004))
-  mask = removeSmallComponents(mask, w, h, minSpeck)
+  // Pure B&W bitmaps are already clean die-lines — skip speck stripping so
+  // every polka hole / micro stroke from the source reaches Potrace.
+  const pureBinary = isPureBinaryBitmap(imageData)
+
+  if (!pureBinary) {
+    // Drop tiny speck components (noise left of silhouettes, texture grit).
+    // Line art keeps flecks — polka rim ticks are often only a few pixels.
+    const minSpeck = lineArt
+      ? Math.max(2, Math.round(w * h * 0.000002))
+      : Math.max(12, Math.round(w * h * 0.00004))
+    mask = removeSmallComponents(mask, w, h, minSpeck)
+  }
 
   if (lineArt) {
-    // Vectorizer-style B&W: never fill white islands (polka dots, spokes, face).
-    // Only strip true 1-neighbor grit — 2-neighbor pixels are often micro-strokes
-    // around polka dots that we must keep.
-    mask = removeIsolatedInk(mask, w, h)
+    // Vectorizer / imaengine-style B&W: never fill white islands (polka, spokes).
+    if (!pureBinary) {
+      // Only strip true 1-neighbor grit so 2-px micro-strokes around dots survive.
+      mask = removeIsolatedInk(mask, w, h, 1)
+    }
   } else {
     // Color pin art: hollow solid black fills into metal walls, but KEEP rings
     // around internal white islands (polka dots). Never majority-fill holes.
     mask = toStrokeWallsPreserveHoles(mask, w, h, 1)
-    mask = removeIsolatedInk(mask, w, h)
+    mask = removeIsolatedInk(mask, w, h, 2)
     mask = removeSmallComponents(mask, w, h, Math.max(4, Math.round(w * h * 0.00001)))
   }
 
+  // UI floor is 0.1px; on an integer grid Euclidean dilate < ~0.15 is a no-op
+  // (matches detail-black thickness 0 hairlines). Color still gets a 1px wall.
   const thickness = Math.max(0.1, Math.min(6, settings.thickness))
-  mask = dilate(mask, w, h, thickness)
+  if (thickness >= 0.15) {
+    mask = dilate(mask, w, h, thickness)
+  } else if (!lineArt) {
+    mask = dilate(mask, w, h, 1)
+  }
 
   // Soft enamel outline plate is always pure black (or white if inverted).
   const stroke: Rgb = settings.invert
@@ -272,14 +288,14 @@ async function maskToTransparentSvg(
     .map((v) => v.toString(16).padStart(2, '0'))
     .join('')}`
 
-  // Keep turdsize tiny so polka-rim flecks and fine hatch ticks survive Potrace.
-  const turdsize = Math.max(1, Math.round(tw * th * 0.0000015))
+  // Keep turdsize low so fine black details survive; white holes are topology.
+  const turdsize = Math.max(2, Math.round(tw * th * 0.000004))
   const traced = await potrace(bw, {
     turdsize,
     turnpolicy: 4,
-    alphamax: 0.85,
+    alphamax: 0.88,
     opticurve: 1,
-    opttolerance: 0.18,
+    opttolerance: 0.2,
     pathonly: false,
     extractcolors: false,
   })
@@ -324,6 +340,7 @@ function restylePotraceSvg(
 /**
  * Build an ink/metal-wall mask from dark stroke pixels.
  * Sensitivity maps to luminance threshold + local-contrast gate.
+ * Line-art thresholds match detail-black (imaengine polka / thin-outline ref).
  */
 function extractInkMask(
   imageData: ImageData,
@@ -361,54 +378,55 @@ function extractInkMask(
     (darkish + lightish) / opaque > 0.82
 
   const t = Math.max(0, Math.min(100, sensitivity)) / 100
-  // Higher detail should pick up thin dark hatches — not flood mid-gray AA that
-  // bridges parallel strokes (that "clumps" lines at hugest detail).
-  const inkCeil = lineArt ? 40 + t * 36 : 26 + t * 48
-  const contrastMin = lineArt ? 10 + (1 - t) * 14 : 14 + (1 - t) * 22
+  const inkCeil = lineArt ? 55 + t * 100 : 28 + t * 55
+  const contrastMin = lineArt ? 6 + (1 - t) * 14 : 14 + (1 - t) * 22
+
+  // Pure B&W line art (no mid-gray AA): copy ink 1:1 so polka holes and micro
+  // strokes match the source bitmap before Potrace (imaengine / Vectorizer target).
+  let midGray = 0
+  if (lineArt) {
+    for (let i = 0; i < n; i++) {
+      if (data[i * 4 + 3] < 128) continue
+      const L = lum[i]
+      if (L >= 40 && L <= 215) midGray++
+    }
+  }
+  const pureBinary = lineArt && opaque > 0 && midGray / opaque < 0.002
 
   const mask = new Uint8Array(n)
-  for (let y = 1; y < height - 1; y++) {
-    for (let x = 1; x < width - 1; x++) {
-      const i = y * width + x
-      const o = i * 4
-      if (data[o + 3] < 128) continue
+  if (pureBinary) {
+    const binCeil = 40 + t * 80 // sensitivity still opens lighter greys if any appear
+    for (let i = 0; i < n; i++) {
+      if (data[i * 4 + 3] < 128) continue
+      if (lum[i] <= binCeil) mask[i] = 255
+    }
+  } else {
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        const i = y * width + x
+        const o = i * 4
+        if (data[o + 3] < 128) continue
 
-      const L = lum[i]
-      if (L > inkCeil + 24) continue
+        const L = lum[i]
+        if (L > inkCeil + 40) continue
 
-      let maxN = 0
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue
-          const v = lum[(y + dy) * width + (x + dx)]
-          if (v > maxN) maxN = v
+        let maxN = 0
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue
+            const v = lum[(y + dy) * width + (x + dx)]
+            if (v > maxN) maxN = v
+          }
         }
-      }
-      const contrast = maxN - L
-      const ch = chromaAt(data, o)
+        const contrast = maxN - L
 
-      const nearBlack = L <= 32 && ch < 35
-      const strongInk = L <= 22
-      // Core ink: dark enough, or a clear dark-on-light edge (thin hatches).
-      const darkCore = L <= inkCeil * 0.72 && ch < 40
-      const darkEdge = L <= inkCeil && contrast >= contrastMin && ch < 45
-      // Mid-gray AA may complete a stroke edge, but must NOT fill gaps between lines.
-      const aaEdge =
-        lineArt &&
-        L > 36 &&
-        L <= inkCeil &&
-        contrast >= contrastMin + 6 &&
-        ch < 28
-      // Micro ticks around white islands (polka rims): high contrast to nearby white,
-      // even when the mark itself is only a few mid-dark pixels.
-      const microRim =
-        lineArt &&
-        L <= 95 &&
-        contrast >= 30 &&
-        ch < 40
+        const nearBlack = L <= inkCeil * 0.55 && chromaAt(data, o) < 35
+        const darkEdge = L <= inkCeil && contrast >= contrastMin
+        const strongInk = L <= 22
+        // Pure line-art: any sufficiently dark low-chroma pixel is ink.
+        const lineInk = lineArt && L <= inkCeil && chromaAt(data, o) < 40
 
-      if (nearBlack || strongInk || darkCore || darkEdge || aaEdge || microRim) {
-        mask[i] = 255
+        if (nearBlack || darkEdge || strongInk || lineInk) mask[i] = 255
       }
     }
   }
@@ -423,6 +441,22 @@ function extractInkMask(
 
 function chromaAt(data: Uint8ClampedArray, o: number): number {
   return Math.max(data[o], data[o + 1], data[o + 2]) - Math.min(data[o], data[o + 1], data[o + 2])
+}
+
+/** True when opaque pixels are almost entirely near-black or near-white (no AA gray). */
+function isPureBinaryBitmap(imageData: ImageData): boolean {
+  const { data, width, height } = imageData
+  const n = width * height
+  let opaque = 0
+  let mid = 0
+  for (let i = 0; i < n; i++) {
+    const o = i * 4
+    if (data[o + 3] < 128) continue
+    opaque++
+    const y = 0.2126 * data[o] + 0.7152 * data[o + 1] + 0.0722 * data[o + 2]
+    if (y >= 40 && y <= 215) mid++
+  }
+  return opaque > 0 && mid / opaque < 0.002
 }
 
 function addSilhouetteRing(
@@ -495,8 +529,14 @@ function removeSmallComponents(
   return out
 }
 
-/** Drop true single-pixel grit only — keep 2-neighbor micro-strokes (polka rims). */
-function removeIsolatedInk(mask: Uint8Array, w: number, h: number): Uint8Array {
+/** Drop speck ink only — never fill white holes (polka dots, spokes, face gaps). */
+function removeIsolatedInk(
+  mask: Uint8Array,
+  w: number,
+  h: number,
+  /** Drop ink whose 3×3 on-count is <= this (self included). 1 = lone pixels; 2 = pairs. */
+  maxOn = 2,
+): Uint8Array {
   const out = new Uint8Array(mask)
   for (let y = 1; y < h - 1; y++) {
     for (let x = 1; x < w - 1; x++) {
@@ -508,7 +548,7 @@ function removeIsolatedInk(mask: Uint8Array, w: number, h: number): Uint8Array {
           if (mask[(y + dy) * w + (x + dx)]) on++
         }
       }
-      if (on <= 1) out[i] = 0
+      if (on <= maxOn) out[i] = 0
     }
   }
   return out
