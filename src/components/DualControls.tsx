@@ -1,4 +1,5 @@
 import type { DualOutputSettings } from '../lib/pipeline'
+import { detailRetentionParams } from '../lib/colorVectorize'
 
 type Props = {
   settings: DualOutputSettings
@@ -188,9 +189,11 @@ export function DualControls({
           step={1}
           value={settings.vector.detailRetention}
           disabled={disabled}
-          onChange={(e) =>
-            patchVector({ detailRetention: Number(e.target.value) })
-          }
+          onChange={(e) => {
+            const detailRetention = Number(e.target.value)
+            const { minRegionRatio } = detailRetentionParams(detailRetention)
+            patchVector({ detailRetention, minRegionRatio })
+          }}
         />
       </div>
       <p className="hint">
