@@ -35,6 +35,11 @@ export type DualOutputResult = {
   outline: OutlineResult
   vector: ColorVectorResult
   proof: ProofSvg
+  /**
+   * Optional cleaned proof from the Clean up button — dominant color per
+   * outline cell. Does not replace `proof`.
+   */
+  final?: ProofSvg
   /** True until color vector finishes (outline may already be usable). */
   vectorPending?: boolean
 }
@@ -146,6 +151,7 @@ export async function remergeVector(
     disabledColors,
   )
   revokeProof(previous.proof)
+  revokeProof(previous.final)
   return {
     outline: previous.outline,
     vector,
@@ -160,4 +166,5 @@ export function revokeDualUrls(result: DualOutputResult | null) {
   URL.revokeObjectURL(result.outline.svgUrl)
   URL.revokeObjectURL(result.vector.svgUrl)
   revokeProof(result.proof)
+  revokeProof(result.final)
 }

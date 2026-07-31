@@ -245,24 +245,18 @@ export default function App() {
         palette: result.vector.palette,
         maxDim: Math.max(result.outline.widthPx, result.vector.widthPx),
       })
+      // Cleaned fills blob is only needed inside the final proof SVG.
+      // (vector download stays the pre-cleanup plate.)
       startTransition(() => {
         setResult((prev) => {
           if (!prev) return prev
-          URL.revokeObjectURL(prev.proof.svgUrl)
-          URL.revokeObjectURL(prev.vector.svgUrl)
+          if (prev.final) URL.revokeObjectURL(prev.final.svgUrl)
           return {
             ...prev,
-            proof: cleaned.proof,
-            vector: {
-              ...prev.vector,
-              svg: cleaned.vectorSvg,
-              svgBlob: cleaned.vectorBlob,
-              svgUrl: URL.createObjectURL(cleaned.vectorBlob),
-              regionCount: cleaned.cellCount,
-            },
+            final: cleaned.proof,
           }
         })
-        setViewMode('proof')
+        setViewMode('final')
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Clean up failed')
@@ -324,6 +318,11 @@ export default function App() {
     downloadBlob(result.proof.svgBlob, `${sourceName}-proof.svg`)
   }, [result, sourceName])
 
+  const downloadFinal = useCallback(() => {
+    if (!result?.final) return
+    downloadBlob(result.final.svgBlob, `${sourceName}-final.svg`)
+  }, [result, sourceName])
+
   const statusText = useMemo(() => {
     if (error) return error
     if (busy || isPending) {
@@ -339,6 +338,11 @@ export default function App() {
     }
     if (result.vectorPending || result.vector.palette.length === 0) {
       return `Outline ready · color vector still running or unavailable`
+    }
+    if (viewMode === 'final') {
+      return result.final
+        ? `Final SVG · one dominant color per outline cell`
+        : `Final · hit Clean up to build from the proof`
     }
     if (viewMode === 'proof') {
       const pmsCount = result.vector.palette.filter((c) => c.pmsCode).length
@@ -421,6 +425,14 @@ export default function App() {
             <button
               type="button"
               className="btn btn-secondary"
+              onClick={downloadFinal}
+              disabled={!result?.final || busy}
+            >
+              Download final SVG
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
               onClick={downloadProof}
               disabled={!result || busy || !!result.vectorPending || result.vector.palette.length === 0}
             >
@@ -488,6 +500,14 @@ export default function App() {
                   disabled={!result || !!result.vectorPending || result.vector.palette.length === 0}
                 >
                   Proof
+                </button>
+                <button
+                  type="button"
+                  className={`tab ${viewMode === 'final' ? 'active' : ''}`}
+                  onClick={() => setViewMode('final')}
+                  disabled={!result || !!result.vectorPending || result.vector.palette.length === 0}
+                >
+                  Final
                 </button>
               </div>
               <div className="preview-actions">
