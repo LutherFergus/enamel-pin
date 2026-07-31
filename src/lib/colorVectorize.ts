@@ -35,10 +35,10 @@ export type ColorVectorSettings = {
 
 export const DEFAULT_COLOR_VECTOR_SETTINGS: ColorVectorSettings = {
   colorCount: 12,
-  detailRetention: 65,
-  // Kept in sync with detailRetentionParams(65) for older readers.
-  minRegionRatio: 0.0008,
-  smoothness: 4,
+  detailRetention: 100,
+  // Kept in sync with detailRetentionParams(100) for older readers.
+  minRegionRatio: 0.00005,
+  smoothness: 1,
   maxDim: 1000,
   snapToPms: true,
   pmsTolerance: 10,

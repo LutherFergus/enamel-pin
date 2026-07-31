@@ -26,7 +26,7 @@ export type DualOutputSettings = {
 
 export const DEFAULT_DUAL_SETTINGS: DualOutputSettings = {
   removeBackground: true,
-  backgroundTolerance: 42,
+  backgroundTolerance: 50,
   outline: { ...DEFAULT_OUTLINE_SETTINGS },
   vector: { ...DEFAULT_COLOR_VECTOR_SETTINGS },
 }
