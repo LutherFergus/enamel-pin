@@ -1,5 +1,5 @@
 import { init as initPotrace, potrace } from 'esm-potrace-wasm'
-import { knockOutSolidBackground } from './background'
+import { removeBackground, type RemoveBgOptions } from './background'
 import type { Rgb } from './types'
 
 export type OutlineSettings = {
@@ -70,11 +70,12 @@ function drawScaled(
 export async function extractOutlinePng(
   source: HTMLImageElement | ImageBitmap,
   settings: OutlineSettings,
+  background: RemoveBgOptions = { enabled: true },
 ): Promise<OutlineResult> {
   const { canvas, ctx, w, h } = drawScaled(source, settings.maxDim)
   const imageData = ctx.getImageData(0, 0, w, h)
 
-  knockOutSolidBackground(imageData)
+  removeBackground(imageData, background)
 
   const { mask: rawMask, lineArt } = extractInkMask(imageData, settings.sensitivity)
   let mask = rawMask

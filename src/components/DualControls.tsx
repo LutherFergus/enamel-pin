@@ -21,6 +21,9 @@ export function DualControls({
   const patchVector = (partial: Partial<DualOutputSettings['vector']>) => {
     onChange({ ...settings, vector: { ...settings.vector, ...partial } })
   }
+  const patchRoot = (partial: Partial<DualOutputSettings>) => {
+    onChange({ ...settings, ...partial })
+  }
 
   return (
     <div>
@@ -42,6 +45,45 @@ export function DualControls({
         {savedLabel ? ` · last change ${savedLabel}` : ''}. Reloads restore your
         latest sliders.
       </p>
+
+      <h2>Background</h2>
+      <label className="check-row">
+        <input
+          type="checkbox"
+          checked={settings.removeBackground}
+          disabled={disabled}
+          onChange={(e) => patchRoot({ removeBackground: e.target.checked })}
+        />
+        <span>Remove background</span>
+      </label>
+      <p className="hint">
+        Clears solid studio/product backdrops (edge flood) so they don’t steal
+        palette slots or muddy the outline. Hit Reprocess after changing.
+      </p>
+      {settings.removeBackground && (
+        <div className="field">
+          <label>
+            <span>Background tolerance</span>
+            <span className="value">{settings.backgroundTolerance}</span>
+          </label>
+          <input
+            type="range"
+            min={8}
+            max={80}
+            step={1}
+            value={settings.backgroundTolerance}
+            disabled={disabled}
+            onChange={(e) =>
+              patchRoot({ backgroundTolerance: Number(e.target.value) })
+            }
+          />
+        </div>
+      )}
+      {settings.removeBackground && (
+        <p className="hint">
+          Higher = more aggressive knockout. Lower if hair/edges get eaten.
+        </p>
+      )}
 
       <h2>Stroke outline (SVG + PNG)</h2>
       <div className="field">

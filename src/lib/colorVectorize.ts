@@ -1,4 +1,4 @@
-import { knockOutSolidBackground } from './background'
+import { removeBackground, type RemoveBgOptions } from './background'
 import { dropSpeckIslands, overlapAdjacentFills, smoothLabelBoundaries } from './labelSmooth'
 import { findPmsByCode, nearestPms, snapPaletteToPms } from './pms'
 import { countLabelUsage, denoiseLabels, extractPalette, quantizeImage } from './quantize'
@@ -282,10 +282,11 @@ export async function vectorizeColors(
   settings: ColorVectorSettings,
   merges: Array<[number, number]> = [],
   overrides: PmsOverrides = {},
+  background: RemoveBgOptions = { enabled: true },
 ): Promise<ColorVectorResult> {
   const imageData = scaleToCanvas(source, settings.maxDim)
   // Product-photo backdrops must not become the "primary" palette color.
-  knockOutSolidBackground(imageData)
+  removeBackground(imageData, background)
   const { width, height } = imageData
   const palette = extractPalette(imageData, settings.colorCount)
   let labels = quantizeImage(imageData, palette)

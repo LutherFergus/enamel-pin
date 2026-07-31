@@ -15,11 +15,17 @@ import {
 import { composeProofSvg, revokeProof, type ProofSvg } from './proofSvg'
 
 export type DualOutputSettings = {
+  /** Knock out solid studio/product backdrops before outline + vector. */
+  removeBackground: boolean
+  /** Backdrop match strength 8–80 (higher = more aggressive). */
+  backgroundTolerance: number
   outline: OutlineSettings
   vector: ColorVectorSettings
 }
 
 export const DEFAULT_DUAL_SETTINGS: DualOutputSettings = {
+  removeBackground: true,
+  backgroundTolerance: 36,
   outline: { ...DEFAULT_OUTLINE_SETTINGS },
   vector: { ...DEFAULT_COLOR_VECTOR_SETTINGS },
 }
@@ -36,9 +42,13 @@ export async function createDualOutputs(
   merges: Array<[number, number]> = [],
   overrides: PmsOverrides = {},
 ): Promise<DualOutputResult> {
+  const background = {
+    enabled: settings.removeBackground,
+    tolerance: settings.backgroundTolerance,
+  }
   const [outline, vector] = await Promise.all([
-    extractOutlinePng(source, settings.outline),
-    vectorizeColors(source, settings.vector, merges, overrides),
+    extractOutlinePng(source, settings.outline, background),
+    vectorizeColors(source, settings.vector, merges, overrides, background),
   ])
   return {
     outline,

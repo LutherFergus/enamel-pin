@@ -20,6 +20,13 @@ export function sanitizeSettings(raw: unknown): DualOutputSettings {
   if (!raw || typeof raw !== 'object') return base
   const o = raw as Partial<DualOutputSettings>
 
+  if (typeof o.removeBackground === 'boolean') {
+    base.removeBackground = o.removeBackground
+  }
+  if (isFiniteNumber(o.backgroundTolerance)) {
+    base.backgroundTolerance = Math.max(8, Math.min(80, Math.round(o.backgroundTolerance)))
+  }
+
   if (o.outline && typeof o.outline === 'object') {
     if (isFiniteNumber(o.outline.sensitivity)) {
       base.outline.sensitivity = Math.max(0, Math.min(100, o.outline.sensitivity))
