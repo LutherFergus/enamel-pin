@@ -18,10 +18,10 @@ export type OutlineSettings = {
 }
 
 export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
-  sensitivity: 42,
+  sensitivity: 48,
   thickness: 0,
   invert: false,
-  maxDim: 1200,
+  maxDim: 1600,
 }
 
 let potraceReady: Promise<void> | null = null
@@ -57,8 +57,8 @@ function drawScaled(
   canvas.width = w
   canvas.height = h
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!
-  ctx.imageSmoothingEnabled = true
-  ctx.imageSmoothingQuality = 'high'
+  // No smoothing — anti-aliased greys fill thin white islands when thresholded.
+  ctx.imageSmoothingEnabled = false
   ctx.drawImage(source, 0, 0, w, h)
   return { canvas, ctx, w, h }
 }
@@ -80,11 +80,14 @@ export async function extractOutlinePng(
   let mask = rawMask
 
   // Drop tiny speck components (noise left of silhouettes, texture grit)
-  mask = removeSmallComponents(mask, w, h, Math.max(12, Math.round(w * h * 0.00004)))
+  const minSpeck = lineArt
+    ? Math.max(4, Math.round(w * h * 0.000008))
+    : Math.max(12, Math.round(w * h * 0.00004))
+  mask = removeSmallComponents(mask, w, h, minSpeck)
 
   if (lineArt) {
-    // B&W / Vectorizer-style line art: preserve stroke weight — light clean only.
-    mask = majorityClean(mask, w, h)
+    // Vectorizer-style B&W: never fill white islands (polka dots, spokes, face).
+    mask = removeIsolatedInk(mask, w, h)
   } else {
     // Color pin art often has large black enamel fills. Hollow those into
     // metal-wall strokes so Outline is a die-line plate, not a flooded silhouette.
@@ -103,9 +106,10 @@ export async function extractOutlinePng(
     mask = dilate(mask, w, h, 1)
   }
 
+  // Soft enamel outline plate is always pure black (or white if inverted).
   const stroke: Rgb = settings.invert
     ? { r: 255, g: 255, b: 255 }
-    : { r: 12, g: 10, b: 9 }
+    : { r: 0, g: 0, b: 0 }
 
   const out = ctx.createImageData(w, h)
   for (let i = 0; i < w * h; i++) {
@@ -169,7 +173,7 @@ function toStrokeWalls(
 
 /**
  * Potrace the ink mask into smooth cubic Bezier paths on a fully transparent SVG.
- * Tuned toward Vectorizer.AI-style die-lines: no backdrop rect, fill #0c0a09-class ink.
+ * Tuned toward Vectorizer.AI-style die-lines: no backdrop rect, fill #000000.
  *
  * Note: pathonly mode omits Potrace's y-flip/scale transform, so we keep the full SVG
  * and restyle it (fill + dimensions) instead of rebuilding path coordinates.
@@ -182,39 +186,35 @@ async function maskToTransparentSvg(
 ): Promise<string> {
   await ensurePotrace()
 
-  // Mild supersample for denser curve fits; viewBox stays at tw×th, displayed at w×h.
-  const superScale = 2
-  const tw = w * superScale
-  const th = h * superScale
+  // Supersample fattens 1px strokes via nearest-neighbor — skip it so thin
+  // Vectorizer-style walls and white islands stay faithful.
+  const tw = w
+  const th = h
   const bw = new ImageData(tw, th)
 
-  for (let y = 0; y < th; y++) {
-    const sy = Math.min(h - 1, (y / superScale) | 0)
-    for (let x = 0; x < tw; x++) {
-      const sx = Math.min(w - 1, (x / superScale) | 0)
-      const si = (sy * w + sx) * 4
-      const di = (y * tw + x) * 4
-      const on = imageData.data[si + 3] >= 128
-      // Potrace expects dark foreground on light background.
-      const v = on ? 0 : 255
-      bw.data[di] = v
-      bw.data[di + 1] = v
-      bw.data[di + 2] = v
-      bw.data[di + 3] = 255
-    }
+  for (let i = 0; i < w * h; i++) {
+    const si = i * 4
+    const di = i * 4
+    const on = imageData.data[si + 3] >= 128
+    const v = on ? 0 : 255
+    bw.data[di] = v
+    bw.data[di + 1] = v
+    bw.data[di + 2] = v
+    bw.data[di + 3] = 255
   }
 
   const inkHex = `#${[ink.r, ink.g, ink.b]
     .map((v) => v.toString(16).padStart(2, '0'))
     .join('')}`
 
-  const turdsize = Math.max(3, Math.round(tw * th * 0.000012))
+  // Keep turdsize low so fine black details survive; white holes are topology.
+  const turdsize = Math.max(2, Math.round(tw * th * 0.000004))
   const traced = await potrace(bw, {
     turdsize,
     turnpolicy: 4,
-    alphamax: 0.92,
+    alphamax: 0.88,
     opticurve: 1,
-    opttolerance: 0.24,
+    opttolerance: 0.2,
     pathonly: false,
     extractcolors: false,
   })
@@ -425,6 +425,25 @@ function majorityClean(mask: Uint8Array, w: number, h: number): Uint8Array {
       // Remove isolated 1-px grit; keep real strokes
       if (mask[i] && on <= 2) out[i] = 0
       else if (!mask[i] && on >= 7) out[i] = 255
+    }
+  }
+  return out
+}
+
+/** Drop speck ink only — never fill white holes (polka dots, spokes, face gaps). */
+function removeIsolatedInk(mask: Uint8Array, w: number, h: number): Uint8Array {
+  const out = new Uint8Array(mask)
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x
+      if (!mask[i]) continue
+      let on = 0
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (mask[(y + dy) * w + (x + dx)]) on++
+        }
+      }
+      if (on <= 2) out[i] = 0
     }
   }
   return out
