@@ -17,6 +17,22 @@ function chromaOf(c: Rgb): number {
   return Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b)
 }
 
+/** True when two Lab colors share a similar hue angle (ignore lightness). */
+function sameHueLab(
+  a: { L: number; a: number; b: number },
+  b: { L: number; a: number; b: number },
+): boolean {
+  const chromaA = Math.hypot(a.a, a.b)
+  const chromaB = Math.hypot(b.a, b.b)
+  if (chromaA < 12 || chromaB < 12) return false
+  const angA = Math.atan2(a.b, a.a)
+  const angB = Math.atan2(b.b, b.a)
+  let d = Math.abs(angA - angB)
+  if (d > Math.PI) d = 2 * Math.PI - d
+  // ~25° — same enamel family (red vs red-orange), not red vs blue.
+  return d <= 0.44
+}
+
 export type ColorVectorSettings = {
   colorCount: number
   /**
@@ -173,6 +189,9 @@ export function autoMergeCloseColors(
   const nearest = snapToPms ? palette.map((c) => nearestPms(c)) : null
   // Same nearest PMS merges a bit more eagerly than raw Lab pairs.
   const samePmsGate = Math.max(tolerance, 6)
+  // Near-identical enamel flats (two reds / two oranges) collapse even when
+  // the slider is modest — ΔE~6–10 is still one die color on metal.
+  const sameHueGate = Math.max(tolerance, 9)
 
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
@@ -183,6 +202,17 @@ export function autoMergeCloseColors(
         (chI >= 45 && chJ < 28) || (chJ >= 45 && chI < 28)
       const de = deltaE76(labs[i], labs[j])
       if (de <= (vividVsDull ? Math.min(tolerance, 4) : tolerance)) {
+        union(i, j)
+        continue
+      }
+      // Same-hue punchy pair (dirndl reds, banner oranges): merge when close.
+      if (
+        !vividVsDull &&
+        chI >= 35 &&
+        chJ >= 35 &&
+        de <= sameHueGate &&
+        sameHueLab(labs[i], labs[j])
+      ) {
         union(i, j)
         continue
       }

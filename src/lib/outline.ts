@@ -22,8 +22,8 @@ export type OutlineSettings = {
 }
 
 export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
-  sensitivity: 60,
-  thickness: 1.49,
+  sensitivity: 55,
+  thickness: 1.1,
   invert: false,
   maxDim: 1600,
 }
@@ -113,7 +113,7 @@ export async function extractOutlinePng(
     // Line art keeps flecks — polka rim ticks are often only a few pixels.
     const minSpeck = !treatAsColorArt
       ? Math.max(2, Math.round(w * h * 0.000002))
-      : Math.max(14, Math.round(w * h * 0.000045))
+      : Math.max(18, Math.round(w * h * 0.00006))
     mask = removeSmallComponents(mask, w, h, minSpeck)
   }
 
@@ -126,9 +126,9 @@ export async function extractOutlinePng(
     // Color art: hollow solid dark fills (hair, deep reds) into metal walls so
     // the outline plate traces the silhouette instead of skipping chromatic darks.
     mask = toStrokeWallsPreserveHoles(mask, w, h, 1)
-    // Photo texture leaves crumbly 1–2px ink — scrub before thicken.
+    // Photo / print texture leaves crumbly 1–2px ink — scrub before thicken.
     mask = removeIsolatedInk(mask, w, h, 2)
-    mask = removeSmallComponents(mask, w, h, Math.max(8, Math.round(w * h * 0.00002)))
+    mask = removeSmallComponents(mask, w, h, Math.max(12, Math.round(w * h * 0.00003)))
   }
 
   // Sources are normalized to maxDim above, so thickness in px is already
@@ -139,6 +139,15 @@ export async function extractOutlinePng(
     mask = dilate(mask, w, h, thickness)
   } else if (treatAsColorArt) {
     mask = dilate(mask, w, h, 1)
+  }
+
+  if (treatAsColorArt) {
+    // Seal hairline gaps then open once — kills speckles and jagged fringe
+    // without fattening stroke weight past the dilation above.
+    mask = morphClose(mask, w, h, 1)
+    mask = morphOpen(mask, w, h, 1)
+    mask = removeIsolatedInk(mask, w, h, 2)
+    mask = removeSmallComponents(mask, w, h, Math.max(10, Math.round(w * h * 0.000025)))
   }
 
   // Soft enamel outline plate is always pure black (or white if inverted).
@@ -311,14 +320,15 @@ async function maskToTransparentSvg(
     .map((v) => v.toString(16).padStart(2, '0'))
     .join('')}`
 
-  // Drop fleck paths from photo grit; keep white holes as topology.
-  const turdsize = Math.max(4, Math.round(tw * th * 0.000006))
+  // Drop fleck paths from photo/print grit; keep white holes as topology.
+  // Slightly higher turdsize on dense illustrations (diamond grids, lace).
+  const turdsize = Math.max(6, Math.round(tw * th * 0.00001))
   const traced = await potrace(bw, {
     turdsize,
     turnpolicy: 4,
-    alphamax: 0.92,
+    alphamax: 1.0,
     opticurve: 1,
-    opttolerance: 0.28,
+    opttolerance: 0.36,
     pathonly: false,
     extractcolors: false,
   })
@@ -458,8 +468,8 @@ function extractInkMask(
         // Mid-tone panel/fold edges only — needs a clear step, not shading grit.
         const midEdge =
           !photoLike &&
-          L <= inkCeil + 28 &&
-          contrast >= contrastMin + 8
+          L <= inkCeil + 22 &&
+          contrast >= contrastMin + 10
         const strongInk = L <= 18
         // Pure line-art: any sufficiently dark low-chroma pixel is ink.
         const lineInk = lineArt && L <= inkCeil && ch < 40
@@ -528,13 +538,20 @@ function addSilhouetteRing(
   w: number,
   h: number,
 ) {
+  // Build a cleaned subject mask first so AA fringe / bg-removal nicks don't
+  // become a jagged outer die-line.
+  const subject = new Uint8Array(w * h)
+  for (let i = 0; i < w * h; i++) {
+    const o = i * 4
+    if (data[o + 3] < 128) continue
+    if (lum[i] > 230) continue
+    subject[i] = 255
+  }
+  const closed = morphClose(subject, w, h, 2)
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = y * w + x
-      const o = i * 4
-      if (data[o + 3] < 128) continue
-      // Only ring subject pixels that are not already near-white paper.
-      if (lum[i] > 230) continue
+      if (!closed[i]) continue
       let border = false
       for (const [dx, dy] of [
         [1, 0],
@@ -552,10 +569,7 @@ function addSilhouetteRing(
           border = true
           break
         }
-        const ni = ny * w + nx
-        const no = ni * 4
-        // Transparent knockout OR light background / paper.
-        if (data[no + 3] < 128 || lum[ni] >= 220) {
+        if (!closed[ny * w + nx]) {
           border = true
           break
         }
@@ -717,4 +731,14 @@ function erode(mask: Uint8Array, w: number, h: number, radius: number): Uint8Arr
     }
   }
   return out
+}
+
+/** Dilate then erode — seals hairline gaps / nicks. */
+function morphClose(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
+  return erode(dilate(mask, w, h, radius), w, h, radius)
+}
+
+/** Erode then dilate — drops speckles and jagged fringe. */
+function morphOpen(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
+  return dilate(erode(mask, w, h, radius), w, h, radius)
 }
