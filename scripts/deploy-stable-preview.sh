@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build and force-push dist to gh-pages for the permanent GitHub Pages URL.
-# After one-time Pages enable: https://lutherfergus.github.io/mosaic-image-creator/
+# https://lutherfergus.github.io/enamel-pin/
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -28,9 +28,5 @@ git push -f origin gh-pages
 
 echo ""
 echo "Published to gh-pages."
-echo "Stable URL (once Pages is enabled):"
-echo "  https://lutherfergus.github.io/mosaic-image-creator/"
-echo ""
-echo "If that 404s, enable Pages once:"
-echo "  https://github.com/LutherFergus/mosaic-image-creator/settings/pages"
-echo "  → Deploy from a branch → gh-pages / root → Save"
+echo "Stable URL:"
+echo "  https://lutherfergus.github.io/enamel-pin/"

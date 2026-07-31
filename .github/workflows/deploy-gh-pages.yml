@@ -1,8 +1,6 @@
 name: Deploy stable preview (gh-pages)
 
-# Keeps https://lutherfergus.github.io/mosaic-image-creator/ updated.
-# One-time setup (repo owner): Settings → Pages → Deploy from a branch →
-# Branch: gh-pages / / (root) → Save.
+# Keeps https://lutherfergus.github.io/enamel-pin/ updated.
 on:
   push:
     branches:

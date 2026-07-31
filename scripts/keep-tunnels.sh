@@ -24,7 +24,7 @@ restart_cmd() {
 write_urls() {
   {
     echo "updated=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    echo "pages=https://lutherfergus.github.io/mosaic-image-creator/"
+    echo "pages=https://lutherfergus.github.io/enamel-pin/"
     local lhr
     lhr=$(grep -oE 'https://[a-z0-9]+\.lhr\.life' /tmp/sshtun.log 2>/dev/null | tail -1 || true)
     local bore
