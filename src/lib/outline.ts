@@ -54,7 +54,8 @@ function drawScaled(
 ): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; w: number; h: number } {
   const srcW = 'naturalWidth' in source ? source.naturalWidth : source.width
   const srcH = 'naturalHeight' in source ? source.naturalHeight : source.height
-  const scale = Math.min(1, maxDim / Math.max(srcW, srcH))
+  // Always fit to maxDim (upscale small sources) so thickness is resolution-stable.
+  const scale = maxDim / Math.max(srcW, srcH)
   const w = Math.max(1, Math.round(srcW * scale))
   const h = Math.max(1, Math.round(srcH * scale))
   const canvas = document.createElement('canvas')
@@ -112,7 +113,7 @@ export async function extractOutlinePng(
     // Line art keeps flecks — polka rim ticks are often only a few pixels.
     const minSpeck = !treatAsColorArt
       ? Math.max(2, Math.round(w * h * 0.000002))
-      : Math.max(12, Math.round(w * h * 0.00004))
+      : Math.max(8, Math.round(w * h * 0.00002))
     mask = removeSmallComponents(mask, w, h, minSpeck)
   }
 
@@ -125,17 +126,20 @@ export async function extractOutlinePng(
     // Color art: hollow solid dark fills (hair, deep reds) into metal walls so
     // the outline plate traces the silhouette instead of skipping chromatic darks.
     mask = toStrokeWallsPreserveHoles(mask, w, h, 1)
-    mask = removeIsolatedInk(mask, w, h, 2)
-    mask = removeSmallComponents(mask, w, h, Math.max(4, Math.round(w * h * 0.00001)))
+    mask = removeIsolatedInk(mask, w, h, 1)
+    mask = removeSmallComponents(mask, w, h, Math.max(3, Math.round(w * h * 0.000006)))
   }
 
-  // UI floor is 0.1px; on an integer grid Euclidean dilate < ~0.15 is a no-op
-  // (matches detail-black thickness 0 hairlines). Color still gets a 1px wall.
-  const thickness = Math.max(0.1, Math.min(6, settings.thickness))
+  // Thickness is relative to a fixed reference canvas so the same slider looks
+  // consistent across source resolutions (working size is always ~maxDim).
+  const REFERENCE_DIM = 1000
+  const thicknessPx = Math.max(0.1, Math.min(6, settings.thickness))
+  const scale = Math.max(w, h) / REFERENCE_DIM
+  const thickness = thicknessPx * scale
   if (thickness >= 0.15) {
     mask = dilate(mask, w, h, thickness)
   } else if (treatAsColorArt) {
-    mask = dilate(mask, w, h, 1)
+    mask = dilate(mask, w, h, Math.max(1, scale))
   }
 
   // Soft enamel outline plate is always pure black (or white if inverted).
@@ -309,7 +313,7 @@ async function maskToTransparentSvg(
     .join('')}`
 
   // Keep turdsize low so fine black details survive; white holes are topology.
-  const turdsize = Math.max(2, Math.round(tw * th * 0.000004))
+  const turdsize = Math.max(2, Math.round(tw * th * 0.000002))
   const traced = await potrace(bw, {
     turdsize,
     turnpolicy: 4,
@@ -398,8 +402,9 @@ function extractInkMask(
     (darkish + lightish) / opaque > 0.82
 
   const t = Math.max(0, Math.min(100, sensitivity)) / 100
-  const inkCeil = lineArt ? 55 + t * 100 : 28 + t * 55
-  const contrastMin = lineArt ? 6 + (1 - t) * 14 : 14 + (1 - t) * 22
+  // Color art: open inkCeil so mid-dark garment/feature edges still wall.
+  const inkCeil = lineArt ? 55 + t * 100 : 40 + t * 70
+  const contrastMin = lineArt ? 6 + (1 - t) * 14 : 10 + (1 - t) * 18
 
   // Pure B&W line art (no mid-gray AA): copy ink 1:1 so polka holes and micro
   // strokes match the source bitmap before Potrace (imaengine / Vectorizer target).
@@ -421,21 +426,26 @@ function extractInkMask(
       if (lum[i] <= binCeil) mask[i] = 255
     }
   } else {
-    for (let y = 1; y < height - 1; y++) {
-      for (let x = 1; x < width - 1; x++) {
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
         const i = y * width + x
         const o = i * 4
         if (data[o + 3] < 128) continue
 
         const L = lum[i]
-        if (L > inkCeil + 40) continue
+        if (L > inkCeil + 55) continue
 
-        let maxN = 0
+        let maxN = L
+        let minN = L
         for (let dy = -1; dy <= 1; dy++) {
           for (let dx = -1; dx <= 1; dx++) {
             if (dx === 0 && dy === 0) continue
-            const v = lum[(y + dy) * width + (x + dx)]
+            const nx = x + dx
+            const ny = y + dy
+            if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue
+            const v = lum[ny * width + nx]
             if (v > maxN) maxN = v
+            if (v < minN) minN = v
           }
         }
         const contrast = maxN - L
@@ -443,14 +453,23 @@ function extractInkMask(
         const ch = chromaAt(data, o)
         const nearBlack = L <= inkCeil * 0.55 && ch < 35
         const darkEdge = L <= inkCeil && contrast >= contrastMin
+        // Mid-tone edges on mid fills (panels, folds) — not only deep darks.
+        const midEdge = L <= inkCeil + 45 && contrast >= contrastMin + 4
         const strongInk = L <= 22
         // Pure line-art: any sufficiently dark low-chroma pixel is ink.
         const lineInk = lineArt && L <= inkCeil && ch < 40
         // Navy hair / deep reds: dark enough but high chroma — must not be
         // dropped by the nearBlack chroma gate or hair loses its silhouette.
-        const darkChromaticFill = L <= 55 + t * 50 && ch >= 16
+        const darkChromaticFill = L <= 55 + t * 55 && ch >= 14
 
-        if (nearBlack || darkEdge || strongInk || lineInk || darkChromaticFill) {
+        if (
+          nearBlack ||
+          darkEdge ||
+          midEdge ||
+          strongInk ||
+          lineInk ||
+          darkChromaticFill
+        ) {
           mask[i] = 255
         }
       }
@@ -461,7 +480,7 @@ function extractInkMask(
   // Skip only on true low-chroma line art (would fatten every hatch).
   if (!lineArt || avgChroma >= 14) {
     addSilhouetteRing(mask, data, lum, width, height)
-    addDarkOnLightContours(mask, data, lum, width, height, 55 + t * 50)
+    addDarkOnLightContours(mask, data, lum, width, height, 70 + t * 55)
   }
 
   return { mask, lineArt, avgChroma }
@@ -494,24 +513,34 @@ function addSilhouetteRing(
   w: number,
   h: number,
 ) {
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
       const i = y * w + x
       const o = i * 4
       if (data[o + 3] < 128) continue
-      // Only ring subject pixels that are not already near-white.
-      if (lum[i] > 210) continue
+      // Only ring subject pixels that are not already near-white paper.
+      if (lum[i] > 230) continue
       let border = false
       for (const [dx, dy] of [
         [1, 0],
         [-1, 0],
         [0, 1],
         [0, -1],
+        [1, 1],
+        [-1, 1],
+        [1, -1],
+        [-1, -1],
       ] as const) {
-        const ni = (y + dy) * w + (x + dx)
+        const nx = x + dx
+        const ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) {
+          border = true
+          break
+        }
+        const ni = ny * w + nx
         const no = ni * 4
         // Transparent knockout OR light background / paper.
-        if (data[no + 3] < 128 || lum[ni] >= 225) {
+        if (data[no + 3] < 128 || lum[ni] >= 220) {
           border = true
           break
         }

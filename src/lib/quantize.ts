@@ -28,8 +28,18 @@ function isLeftoverBackdrop(c: Rgb): boolean {
   return luminance(c) >= 248 && chroma(c) <= 12 && !isSkinTone(c)
 }
 
+/** Mid-to-vivid accents — enamel fills, not near-black metal. */
 function isAccent(c: Rgb): boolean {
-  return chroma(c) >= 45 || skinScore(c) > 0.12
+  const L = luminance(c)
+  if (L < 28 || L > 245) return false
+  return chroma(c) >= 32 || skinScore(c) > 0.12
+}
+
+/** Peak preference for mid-chroma / vivid enamel over gray ladders. */
+function chromaBoost(ch01: number): number {
+  // Mild at low chroma, strong through mid-vibrant (0.2–0.55), still up for brights.
+  const mid = Math.exp(-Math.pow((ch01 - 0.38) / 0.22, 2))
+  return 1.8 * ch01 + 7.5 * ch01 * ch01 + 4.2 * mid
 }
 
 type HistBin = {
@@ -97,9 +107,9 @@ export function extractPalette(
       const ch = chroma(pixel) / 255
       const skin = skinScore(pixel)
       const dist = Math.hypot(x - cx, y - cy) / maxDist
-      // Center/subject bias + strong chroma/skin boost (refs keep reds & flesh).
+      // Center/subject bias + mid-vibrant chroma peak (prefer enamel over gray).
       const spatial = 0.55 + 0.45 * (1 - dist)
-      const importance = spatial * (1 + 4.2 * ch * ch + 5.5 * skin)
+      const importance = spatial * (1 + chromaBoost(ch) + 5.5 * skin)
 
       const br = Math.min(BIN - 1, (r * BIN) >> 8)
       const bg = Math.min(BIN - 1, (g * BIN) >> 8)
@@ -139,7 +149,7 @@ export function extractPalette(
   const selected: Array<Rgb & { n: number; score: number; chroma: number; skin: number }> =
     []
 
-  const neutralCap = Math.max(2, Math.ceil(target * 0.5))
+  const neutralCap = Math.max(1, Math.ceil(target * 0.28))
   let neutralCount = 0
 
   const tryAdd = (bin: HistBin, minDist: number): boolean => {
@@ -161,57 +171,83 @@ export function extractPalette(
     return true
   }
 
-  // 1) Structural extremes first (black / light) — Vectorizer always keeps these.
-  ensureExtreme(bins, selected, target, true, () => {
-    neutralCount++
-  })
-  ensureExtreme(bins, selected, target, false, () => {
-    neutralCount++
-  })
+  // 1) Structural extremes first — only when they cover meaningful area.
+  const darkN = bins
+    .filter((b) => luminance(b) < 28)
+    .reduce((s, b) => s + b.n, 0)
+  const lightN = bins
+    .filter((b) => luminance(b) > 232 && chroma(b) < 22)
+    .reduce((s, b) => s + b.n, 0)
+  if (darkN / totalN > 0.004) {
+    ensureExtreme(bins, selected, target, true, () => {
+      neutralCount++
+    })
+  }
+  if (lightN / totalN > 0.004) {
+    ensureExtreme(bins, selected, target, false, () => {
+      neutralCount++
+    })
+  }
 
   // 1b) Force best skin/flesh bin if present (minority area, high subject value).
   ensureSkin(bins, selected, target)
 
-  // 2) Subject accents + skin BEFORE majority neutrals (~40% of slots).
-  const accentSlots = Math.max(2, Math.round(target * 0.4))
+  // 2) Subject accents + skin BEFORE majority neutrals (~55% of slots).
+  const accentSlots = Math.max(3, Math.round(target * 0.55))
   const accents = [...bins].sort((a, b) => {
-    const sa = (a.chroma / 255) * 2.2 + a.skin * 3.5 + Math.log2(2 + a.n) * 0.15
-    const sb = (b.chroma / 255) * 2.2 + b.skin * 3.5 + Math.log2(2 + b.n) * 0.15
+    const La = luminance(a)
+    const Lb = luminance(b)
+    const midA = 1 - Math.abs(La - 140) / 180
+    const midB = 1 - Math.abs(Lb - 140) / 180
+    const sa =
+      (a.chroma / 255) * 3.4 +
+      midA * 0.9 +
+      a.skin * 3.5 +
+      Math.log2(2 + a.n) * 0.12
+    const sb =
+      (b.chroma / 255) * 3.4 +
+      midB * 0.9 +
+      b.skin * 3.5 +
+      Math.log2(2 + b.n) * 0.12
     return sb - sa
   })
   for (const bin of accents) {
     if (selected.length >= Math.min(target, 2 + accentSlots)) break
     if (!isAccent(bin) && bin.skin < 0.1) continue
-    tryAdd(bin, 38)
+    tryAdd(bin, 34)
   }
 
   // 3) Shade companions for accents (dark red under bright red, etc.).
   for (const bin of bins) {
     if (selected.length >= target) break
-    if (bin.chroma < 40) continue
+    if (bin.chroma < 32) continue
     // Prefer darker/lighter sibling of an already-selected accent hue family.
     const related = selected.some((s) => {
-      if (s.chroma < 40) return false
+      if (s.chroma < 32) return false
       const hueDist =
         Math.abs(s.r - bin.r) + Math.abs(s.g - bin.g) + Math.abs(s.b - bin.b)
       const lumGap = Math.abs(luminance(s) - luminance(bin))
       return hueDist < 160 && lumGap > 25 && lumGap < 120
     })
     if (!related) continue
-    tryAdd(bin, 34)
+    tryAdd(bin, 32)
   }
 
-  // 4) Remaining by subject-weighted score (population still matters, but
-  //    neutrals are capped so gray ladders can't dominate).
+  // 4) Remaining — chromatic bins first, then neutrals under cap.
   for (const bin of bins) {
     if (selected.length >= target) break
-    tryAdd(bin, 32)
+    if (isNeutral(bin) && bin.skin < 0.08) continue
+    tryAdd(bin, 30)
+  }
+  for (const bin of bins) {
+    if (selected.length >= target) break
+    tryAdd(bin, 28)
   }
 
   // Fill if accent-first left gaps (rare).
   for (const bin of bins) {
     if (selected.length >= target) break
-    tryAdd(bin, 26)
+    tryAdd(bin, 24)
   }
 
   // Order: importance score first so PMS snap / UI show subject colors early,
@@ -347,8 +383,11 @@ function refinePalette(imageData: ImageData, palette: Rgb[], sampleStep: number)
         const d = dist2(pixel, palette[c])
         // Slight bias: keep chromatic pixels from collapsing into neutrals.
         const neutralPenalty =
-          isNeutral(palette[c]) && chroma(pixel) > 40 ? 18 * 18 : 0
-        const dd = d + neutralPenalty
+          isNeutral(palette[c]) && chroma(pixel) > 36 ? 28 * 28 : 0
+        // Keep mid-vibrant pixels from collapsing into darker majority slots.
+        const dullPenalty =
+          chroma(palette[c]) < 30 && chroma(pixel) >= 50 ? 22 * 22 : 0
+        const dd = d + neutralPenalty + dullPenalty
         if (dd < bestD) {
           bestD = dd
           best = c
@@ -363,11 +402,16 @@ function refinePalette(imageData: ImageData, palette: Rgb[], sampleStep: number)
 
   return palette.map((c, i) => {
     if (sums[i].n === 0) return c
-    return {
+    const next = {
       r: Math.round(sums[i].r / sums[i].n),
       g: Math.round(sums[i].g / sums[i].n),
       b: Math.round(sums[i].b / sums[i].n),
     }
+    // Freeze vivid seeds — don't let area-weighted refine mute them.
+    if (chroma(c) >= 55 && chroma(next) < chroma(c) * 0.72) {
+      return c
+    }
+    return next
   })
 }
 

@@ -114,8 +114,8 @@ export function DualControls({
         />
       </div>
       <p className="hint">
-        Extracts dark metal walls / ink. Higher keeps thinner hatches without
-        flooding the gaps between close lines. Reprocess to apply.
+        Extracts dark metal walls / ink and silhouette edges. Higher keeps thinner
+        hatches without flooding gaps. Reprocess to apply.
       </p>
       <div className="field">
         <label>
@@ -137,8 +137,8 @@ export function DualControls({
         />
       </div>
       <p className="hint">
-        Free 0.1–6px decimal. 0.1px is the finest hairline; raise for heavier metal
-        walls. Reprocess to apply.
+        Relative to a fixed working size so weight stays consistent across photos.
+        0.1px is the finest hairline. Reprocess to apply.
       </p>
 
       <h2>Color vector (SVG)</h2>

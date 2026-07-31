@@ -13,6 +13,10 @@ import { labelsToSmoothSvg } from './traceSvg'
 import type { PaletteColor, Rgb } from './types'
 import { colorDistance, rgbToHex } from './types'
 
+function chromaOf(c: Rgb): number {
+  return Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b)
+}
+
 export type ColorVectorSettings = {
   colorCount: number
   /**
@@ -147,10 +151,17 @@ export function autoMergeCloseColors(
     let ra = find(a)
     let rb = find(b)
     if (ra === rb) return
-    // Keep the larger-area color as the merge root.
     const areaA = areas[ra] ?? 0
     const areaB = areas[rb] ?? 0
-    if (areaB > areaA) {
+    const chA = chromaOf(palette[ra])
+    const chB = chromaOf(palette[rb])
+    // Prefer vivid enamel as merge root over dull majority when clearly more chromatic.
+    if (chA > chB + 22 && chA >= 40) {
+      // keep ra
+    } else if (chB > chA + 22 && chB >= 40) {
+      parent[ra] = rb
+      return
+    } else if (areaB > areaA) {
       const tmp = ra
       ra = rb
       rb = tmp
@@ -165,12 +176,19 @@ export function autoMergeCloseColors(
 
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
-      if (deltaE76(labs[i], labs[j]) <= tolerance) {
+      const chI = chromaOf(palette[i])
+      const chJ = chromaOf(palette[j])
+      // Don't fold a vivid minority into a dull neighbor unless extremely close.
+      const vividVsDull =
+        (chI >= 45 && chJ < 28) || (chJ >= 45 && chI < 28)
+      const de = deltaE76(labs[i], labs[j])
+      if (de <= (vividVsDull ? Math.min(tolerance, 4) : tolerance)) {
         union(i, j)
         continue
       }
       if (
         nearest &&
+        !vividVsDull &&
         nearest[i].pms.code === nearest[j].pms.code &&
         nearest[i].deltaE <= samePmsGate &&
         nearest[j].deltaE <= samePmsGate
