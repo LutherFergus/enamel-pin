@@ -36,13 +36,6 @@ export function sanitizeSettings(raw: unknown): DualOutputSettings {
   if (isFiniteNumber(o.backgroundTolerance)) {
     base.backgroundTolerance = Math.max(8, Math.min(80, Math.round(o.backgroundTolerance)))
   }
-  if (isFiniteNumber(o.metalWallMm)) {
-    base.metalWallMm =
-      Math.round(Math.max(0.15, Math.min(0.8, o.metalWallMm)) * 100) / 100
-  }
-  if (isFiniteNumber(o.pinWidthMm)) {
-    base.pinWidthMm = Math.max(8, Math.min(120, o.pinWidthMm))
-  }
 
   if (o.outline && typeof o.outline === 'object') {
     if (isFiniteNumber(o.outline.sensitivity)) {

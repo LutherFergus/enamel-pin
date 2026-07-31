@@ -96,7 +96,6 @@ export default function App() {
           nextSettings.vector.detailRetention,
           nextSettings.vector.pmsTolerance,
           nextDisabled,
-          nextSettings,
         )
         startTransition(() => {
           setResult((prev) => {
@@ -134,36 +133,14 @@ export default function App() {
           nextMerges,
           nextOverrides,
           (partial) => {
-            // Outline / mid proof — keep ink outline URLs alive across updates.
+            // Outline is ready — show it while color vector still runs.
             startTransition(() => {
               setResult((prev) => {
-                if (prev) {
-                  // Revoke only layers that are being replaced, not shared ink.
-                  if (
-                    prev.proof.svgUrl !== partial.proof.svgUrl
-                  ) {
-                    URL.revokeObjectURL(prev.proof.svgUrl)
-                  }
-                  if (
-                    prev.vector.svgUrl !== partial.vector.svgUrl &&
-                    prev.vector.palette.length === 0
-                  ) {
-                    URL.revokeObjectURL(prev.vector.svgUrl)
-                  } else if (
-                    prev.vector.svgUrl !== partial.vector.svgUrl &&
-                    partial.proofPending
-                  ) {
-                    // Mid update still owns the raw vector until finalize;
-                    // don't revoke — finalize will replace it.
-                  }
-                }
+                revokeDualUrls(prev)
                 return partial
               })
-              if (!opts.preserveView && partial.vectorPending) {
+              if (!opts.preserveView) {
                 setViewMode('outline')
-              }
-              if (partial.proofPending) {
-                setViewMode('proof')
               }
             })
           },
@@ -171,23 +148,12 @@ export default function App() {
         )
         startTransition(() => {
           setResult((prev) => {
-            if (prev) {
-              if (
-                prev.outline.svgUrl !== next.outline.svgUrl &&
-                prev.outline.svgUrl !== next.inkOutline.svgUrl
-              ) {
-                URL.revokeObjectURL(prev.outline.pngUrl)
-                URL.revokeObjectURL(prev.outline.svgUrl)
-              }
-              if (
-                prev.vector.svgUrl !== next.vector.svgUrl
-              ) {
-                URL.revokeObjectURL(prev.vector.svgUrl)
-              }
-              if (prev.proof.svgUrl !== next.proof.svgUrl) {
-                URL.revokeObjectURL(prev.proof.svgUrl)
-              }
+            // `next` reuses the same outline object/URLs from `partial`.
+            // Placeholder vector/proof were already revoked inside createDualOutputs.
+            if (prev && prev.outline.svgUrl === next.outline.svgUrl) {
+              return next
             }
+            revokeDualUrls(prev)
             return next
           })
           if (!opts.preserveView) {
@@ -315,9 +281,6 @@ export default function App() {
   const statusText = useMemo(() => {
     if (error) return error
     if (busy || isPending) {
-      if (result?.proofPending) {
-        return 'Fitting colors into outline cells for final proof…'
-      }
       if (result?.outline && result.vectorPending) {
         return `Outline ready · ${result.outline.pathCount} paths — building color vector…`
       }
@@ -333,7 +296,7 @@ export default function App() {
     }
     if (viewMode === 'proof') {
       const pmsCount = result.vector.palette.filter((c) => c.pmsCode).length
-      return `Final proof · cells filled with dominant colors (${result.vector.palette.length} fills / ${pmsCount} PMS) + outline (${result.outline.pathCount} paths)`
+      return `Proof SVG · vector (${result.vector.palette.length} fills / ${pmsCount} PMS) + outline (${result.outline.pathCount} paths)`
     }
     const pmsCount = result.vector.palette.filter((c) => c.pmsCode).length
     return `Vector SVG · ${result.vector.palette.length} fills · ${pmsCount} PMS · ${result.vector.regionCount} shapes`

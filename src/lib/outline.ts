@@ -4,7 +4,6 @@ import {
   removeBackground,
   type RemoveBgOptions,
 } from './background'
-import { scaleMaskNearest } from './metalWalls'
 import type { Rgb } from './types'
 
 export type OutlineSettings = {
@@ -86,7 +85,7 @@ export async function extractOutlinePng(
   settings: OutlineSettings,
   background: RemoveBgOptions = { enabled: true, tolerance: 42 },
 ): Promise<OutlineResult> {
-  const { ctx, w, h } = drawScaled(source, settings.maxDim)
+  const { canvas, ctx, w, h } = drawScaled(source, settings.maxDim)
   const imageData = ctx.getImageData(0, 0, w, h)
 
   if (background.enabled !== false) {
@@ -144,23 +143,6 @@ export async function extractOutlinePng(
     ? { r: 255, g: 255, b: 255 }
     : { r: 0, g: 0, b: 0 }
 
-  return outlineFromMask(mask, w, h, stroke)
-}
-
-/**
- * Build outline PNG + SVG from an ink mask (opaque ink, transparent elsewhere).
- */
-export async function outlineFromMask(
-  mask: Uint8Array,
-  w: number,
-  h: number,
-  stroke: Rgb = { r: 0, g: 0, b: 0 },
-): Promise<OutlineResult> {
-  const canvas = document.createElement('canvas')
-  canvas.width = w
-  canvas.height = h
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })!
-
   const out = ctx.createImageData(w, h)
   for (let i = 0; i < w * h; i++) {
     const o = i * 4
@@ -201,54 +183,6 @@ export async function outlineFromMask(
     heightPx: h,
     pathCount,
   }
-}
-
-/**
- * Read the ink mask from an existing outline PNG (alpha ≥ 128 = ink).
- */
-export async function loadOutlineInkMask(
-  outline: OutlineResult,
-): Promise<{ mask: Uint8Array; w: number; h: number }> {
-  const bmp = await createImageBitmap(outline.pngBlob)
-  const w = bmp.width
-  const h = bmp.height
-  const canvas = document.createElement('canvas')
-  canvas.width = w
-  canvas.height = h
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })!
-  ctx.drawImage(bmp, 0, 0)
-  bmp.close?.()
-  const data = ctx.getImageData(0, 0, w, h).data
-  const mask = new Uint8Array(w * h)
-  for (let i = 0; i < w * h; i++) {
-    mask[i] = data[i * 4 + 3] >= 128 ? 255 : 0
-  }
-  return { mask, w, h }
-}
-
-/**
- * Union color-adjacency walls into the die-line outline and re-Potrace.
- */
-export async function enhanceOutlineWithWalls(
-  outline: OutlineResult,
-  wallMask: Uint8Array,
-  wallW: number,
-  wallH: number,
-  invert = false,
-): Promise<OutlineResult> {
-  const { mask, w, h } = await loadOutlineInkMask(outline)
-  let walls = wallMask
-  if (wallW !== w || wallH !== h) {
-    walls = scaleMaskNearest(wallMask, wallW, wallH, w, h)
-  }
-  const merged = new Uint8Array(w * h)
-  for (let i = 0; i < w * h; i++) {
-    merged[i] = mask[i] || walls[i] ? 255 : 0
-  }
-  const stroke: Rgb = invert
-    ? { r: 255, g: 255, b: 255 }
-    : { r: 0, g: 0, b: 0 }
-  return outlineFromMask(merged, w, h, stroke)
 }
 
 /**

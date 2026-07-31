@@ -140,32 +140,6 @@ export function DualControls({
         Free 0.1–6px decimal. 0.1px is the finest hairline; raise for heavier metal
         walls. Reprocess to apply.
       </p>
-      <div className="field">
-        <label>
-          <span>Color wall gap</span>
-          <span className="value">{settings.metalWallMm.toFixed(2)} mm</span>
-        </label>
-        <input
-          type="range"
-          min={0.15}
-          max={0.8}
-          step={0.01}
-          value={settings.metalWallMm}
-          disabled={disabled}
-          onChange={(e) =>
-            patchRoot({
-              metalWallMm:
-                Math.round(Math.max(0.15, Math.min(0.8, Number(e.target.value))) * 100) /
-                100,
-            })
-          }
-        />
-      </div>
-      <p className="hint">
-        When two fills meet (e.g. skin + shading), add a metal wall if both regions
-        are large enough for this gap. Final proof fills each outlined cell with its
-        dominant color. Reprocess to apply.
-      </p>
 
       <h2>Color vector (SVG)</h2>
       <div className="field">

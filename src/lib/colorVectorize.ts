@@ -78,13 +78,6 @@ export type ColorVectorResult = {
   palette: PaletteColor[]
   regionCount: number
   state: ColorVectorState
-  /**
-   * Labels after merges + disabled remaps — used for metal walls / cell proof.
-   * Same dimensions as widthPx × heightPx.
-   */
-  workingLabels: Uint16Array
-  /** Resolved fill RGB per palette index (PMS / overrides applied). */
-  fillRgb: Rgb[]
 }
 
 function scaleToCanvas(
@@ -413,8 +406,6 @@ async function packResult(
   palette: PaletteColor[],
   regionCount: number,
   state: ColorVectorState,
-  workingLabels: Uint16Array,
-  fillRgb: Rgb[],
 ): Promise<ColorVectorResult> {
   const svgBlob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' })
   return {
@@ -426,8 +417,6 @@ async function packResult(
     palette,
     regionCount,
     state,
-    workingLabels,
-    fillRgb,
   }
 }
 
@@ -483,16 +472,7 @@ function assemble(
     smoothness,
     pathomitScale,
   )
-  return packResult(
-    svg,
-    widthPx,
-    heightPx,
-    metaWithFlags,
-    regionCount,
-    state,
-    finalLabels,
-    fillRgb,
-  )
+  return packResult(svg, widthPx, heightPx, metaWithFlags, regionCount, state)
 }
 
 /**
