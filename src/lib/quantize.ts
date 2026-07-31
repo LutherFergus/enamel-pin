@@ -105,6 +105,10 @@ export function extractPalette(
       const pixel = { r, g, b }
       if (isLeftoverBackdrop(pixel)) continue
       const ch = chroma(pixel) / 255
+      const lum = luminance(pixel)
+      // Drawn black outline ink is metal, not an enamel fill — don't let it
+      // inflate dark muddy bins that steal slots from real colors.
+      if (lum <= 28 && chroma(pixel) < 26) continue
       const skin = skinScore(pixel)
       const dist = Math.hypot(x - cx, y - cy) / maxDist
       // Center/subject bias + mid-vibrant chroma peak (prefer enamel over gray).
@@ -418,6 +422,16 @@ function refinePalette(imageData: ImageData, palette: Rgb[], sampleStep: number)
 export function quantizeImage(imageData: ImageData, palette: Rgb[]): Uint16Array {
   const { data, width, height } = imageData
   const labels = new Uint16Array(width * height)
+  // Darkest low-chroma slot = metal wall / outline ink.
+  let blackIdx = 0
+  let blackLum = Infinity
+  for (let c = 0; c < palette.length; c++) {
+    const L = luminance(palette[c])
+    if (chroma(palette[c]) < 40 && L < blackLum) {
+      blackLum = L
+      blackIdx = c
+    }
+  }
   for (let i = 0; i < width * height; i++) {
     const o = i * 4
     if (data[o + 3] < 128) {
@@ -427,6 +441,11 @@ export function quantizeImage(imageData: ImageData, palette: Rgb[]): Uint16Array
     const pixel = { r: data[o], g: data[o + 1], b: data[o + 2] }
     if (isLeftoverBackdrop(pixel)) {
       labels[i] = 0xffff
+      continue
+    }
+    // Snap drawn outline ink straight to metal black — stops navy/brown fringes.
+    if (luminance(pixel) <= 26 && chroma(pixel) < 30 && blackLum < 40) {
+      labels[i] = blackIdx
       continue
     }
     let best = 0

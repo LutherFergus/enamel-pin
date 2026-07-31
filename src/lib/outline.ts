@@ -22,8 +22,8 @@ export type OutlineSettings = {
 }
 
 export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
-  sensitivity: 55,
-  thickness: 1.1,
+  sensitivity: 48,
+  thickness: 0.8,
   invert: false,
   maxDim: 1600,
 }
@@ -94,7 +94,7 @@ export async function extractOutlinePng(
     fillTransparentWithWhite(imageData)
   }
 
-  const { mask: rawMask, lineArt, avgChroma } = extractInkMask(
+  const { mask: rawMask, lineArt, avgChroma, inkedCartoon } = extractInkMask(
     imageData,
     settings.sensitivity,
   )
@@ -106,34 +106,38 @@ export async function extractOutlinePng(
   // Color illustrations (navy hair, red dress) often still pass the lineArt
   // bimodal test because of large white areas — force wall extraction whenever
   // there's meaningful chroma so solid fills become outer die-lines.
-  const treatAsColorArt = !lineArt || avgChroma >= 14
+  // Exception: pre-inked cartoons already have black strokes — don't hollow.
+  const treatAsColorArt = (!lineArt || avgChroma >= 14) && !inkedCartoon
 
   if (!pureBinary) {
-    // Drop tiny speck components (noise left of silhouettes, texture grit).
-    // Line art keeps flecks — polka rim ticks are often only a few pixels.
-    const minSpeck = !treatAsColorArt
-      ? Math.max(2, Math.round(w * h * 0.000002))
-      : Math.max(18, Math.round(w * h * 0.00006))
+    const minSpeck = lineArt || inkedCartoon
+      ? Math.max(3, Math.round(w * h * 0.000004))
+      : Math.max(14, Math.round(w * h * 0.00004))
     mask = removeSmallComponents(mask, w, h, minSpeck)
   }
 
-  if (!treatAsColorArt) {
-    // True B&W Vectorizer / imaengine line art: keep fills + white islands.
+  if (lineArt || inkedCartoon) {
+    // Drawn black strokes (B&W refs OR color cartoons with ink lines):
+    // keep fills/holes as-traced — do not hollow or silhouette-fatten.
     if (!pureBinary) {
-      mask = removeIsolatedInk(mask, w, h, 1)
+      mask = removeIsolatedInk(mask, w, h, inkedCartoon ? 2 : 1)
+    }
+    if (inkedCartoon) {
+      mask = majorityClean(mask, w, h)
+      mask = removeSmallComponents(mask, w, h, Math.max(6, Math.round(w * h * 0.000012)))
     }
   } else {
-    // Color art: hollow solid dark fills (hair, deep reds) into metal walls so
-    // the outline plate traces the silhouette instead of skipping chromatic darks.
-    mask = toStrokeWallsPreserveHoles(mask, w, h, 1)
-    // Photo / print texture leaves crumbly 1–2px ink — scrub before thicken.
+    // Flat color / product art without drawn ink: hollow solid dark fills
+    // into metal walls (hair, deep reds, black enamel blocks).
+    mask = toStrokeWallsPreserveHoles(mask, w, h, 2)
+    mask = dilate(mask, w, h, 1)
+    mask = majorityClean(mask, w, h)
     mask = removeIsolatedInk(mask, w, h, 2)
-    mask = removeSmallComponents(mask, w, h, Math.max(12, Math.round(w * h * 0.00003)))
+    mask = removeSmallComponents(mask, w, h, Math.max(10, Math.round(w * h * 0.00003)))
   }
 
   // Sources are normalized to maxDim above, so thickness in px is already
-  // resolution-stable — do not multiply by canvas size again (that bloated
-  // stroke weight ~1.6× and merged neighboring walls into blotches).
+  // resolution-stable.
   const thickness = Math.max(0.1, Math.min(6, settings.thickness))
   if (thickness >= 0.15) {
     mask = dilate(mask, w, h, thickness)
@@ -142,12 +146,9 @@ export async function extractOutlinePng(
   }
 
   if (treatAsColorArt) {
-    // Seal hairline gaps then open once — kills speckles and jagged fringe
-    // without fattening stroke weight past the dilation above.
-    mask = morphClose(mask, w, h, 1)
-    mask = morphOpen(mask, w, h, 1)
-    mask = removeIsolatedInk(mask, w, h, 2)
-    mask = removeSmallComponents(mask, w, h, Math.max(10, Math.round(w * h * 0.000025)))
+    // Light cleanup only — avoid morph-open that eats thin cartoon strokes.
+    mask = majorityClean(mask, w, h)
+    mask = removeSmallComponents(mask, w, h, Math.max(8, Math.round(w * h * 0.00002)))
   }
 
   // Soft enamel outline plate is always pure black (or white if inverted).
@@ -320,15 +321,14 @@ async function maskToTransparentSvg(
     .map((v) => v.toString(16).padStart(2, '0'))
     .join('')}`
 
-  // Drop fleck paths from photo/print grit; keep white holes as topology.
-  // Slightly higher turdsize on dense illustrations (diamond grids, lace).
-  const turdsize = Math.max(6, Math.round(tw * th * 0.00001))
+  // Drop fleck paths; keep white holes as topology. Moderate — too high kills lace/grid.
+  const turdsize = Math.max(3, Math.round(tw * th * 0.000005))
   const traced = await potrace(bw, {
     turdsize,
     turnpolicy: 4,
     alphamax: 1.0,
     opticurve: 1,
-    opttolerance: 0.36,
+    opttolerance: 0.32,
     pathonly: false,
     extractcolors: false,
   })
@@ -374,11 +374,19 @@ function restylePotraceSvg(
  * Build an ink/metal-wall mask from dark stroke pixels.
  * Sensitivity maps to luminance threshold + local-contrast gate.
  * Line-art thresholds match detail-black (imaengine polka / thin-outline ref).
+ *
+ * `inkedCartoon`: color art that already has drawn black outlines — extract
+ * those strokes only (no mid-tone walls / chromatic-fill flooding).
  */
 function extractInkMask(
   imageData: ImageData,
   sensitivity: number,
-): { mask: Uint8Array; lineArt: boolean; avgChroma: number } {
+): {
+  mask: Uint8Array
+  lineArt: boolean
+  avgChroma: number
+  inkedCartoon: boolean
+} {
   const { data, width, height } = imageData
   const n = width * height
   const lum = new Float32Array(n)
@@ -386,6 +394,7 @@ function extractInkMask(
   let darkish = 0
   let lightish = 0
   let chromaSum = 0
+  let inkStroke = 0
 
   for (let i = 0; i < n; i++) {
     const o = i * 4
@@ -398,25 +407,40 @@ function extractInkMask(
     lum[i] = y
     if (y < 70) darkish++
     if (y > 200) lightish++
-    chromaSum += chromaAt(data, o)
+    const ch = chromaAt(data, o)
+    chromaSum += ch
+    // Pre-drawn cartoon ink: dark + low chroma (not navy/red enamel fills).
+    if (y <= 42 && ch < 28) inkStroke++
   }
 
   const avgChroma = opaque > 0 ? chromaSum / opaque : 0
   // Line art: bimodal dark+light, low chroma (B&W / near-B&W strokes).
-  // Color pins with black enamel fills must NOT take this path (they'd flood).
   const lineArt =
     opaque > 0 &&
     avgChroma < 28 &&
     darkish / opaque > 0.08 &&
     (darkish + lightish) / opaque > 0.82
 
-  const t = Math.max(0, Math.min(100, sensitivity)) / 100
-  // Color art: enough range for garment edges, not so open midtones become texture ink.
-  const inkCeil = lineArt ? 55 + t * 100 : 32 + t * 58
-  const contrastMin = lineArt ? 6 + (1 - t) * 14 : 12 + (1 - t) * 20
+  // Color cartoon with existing black linework (Oktoberfest-style, etc.).
+  const inkedCartoon =
+    !lineArt &&
+    opaque > 0 &&
+    avgChroma >= 18 &&
+    inkStroke / opaque >= 0.035 &&
+    inkStroke / Math.max(1, darkish) >= 0.45
 
-  // Pure B&W line art (no mid-gray AA): copy ink 1:1 so polka holes and micro
-  // strokes match the source bitmap before Potrace (imaengine / Vectorizer target).
+  const t = Math.max(0, Math.min(100, sensitivity)) / 100
+  const inkCeil = lineArt
+    ? 55 + t * 100
+    : inkedCartoon
+      ? 26 + t * 40
+      : 28 + t * 52
+  const contrastMin = lineArt
+    ? 6 + (1 - t) * 14
+    : inkedCartoon
+      ? 10 + (1 - t) * 16
+      : 14 + (1 - t) * 20
+
   let midGray = 0
   for (let i = 0; i < n; i++) {
     if (data[i * 4 + 3] < 128) continue
@@ -424,61 +448,56 @@ function extractInkMask(
     if (L >= 40 && L <= 215) midGray++
   }
   const pureBinary = lineArt && opaque > 0 && midGray / opaque < 0.002
-  // Photo / soft-shaded art: lots of mid-gray — require real edges, not soft fills.
-  const photoLike = !lineArt && opaque > 0 && midGray / opaque > 0.28
+  const photoLike =
+    !lineArt && !inkedCartoon && opaque > 0 && midGray / opaque > 0.28
 
   const mask = new Uint8Array(n)
   if (pureBinary) {
-    const binCeil = 40 + t * 80 // sensitivity still opens lighter greys if any appear
+    const binCeil = 40 + t * 80
     for (let i = 0; i < n; i++) {
       if (data[i * 4 + 3] < 128) continue
       if (lum[i] <= binCeil) mask[i] = 255
     }
   } else {
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
         const i = y * width + x
         const o = i * 4
         if (data[o + 3] < 128) continue
 
         const L = lum[i]
-        if (L > inkCeil + 40) continue
+        if (L > inkCeil + (inkedCartoon ? 20 : 36)) continue
 
         let maxN = L
         for (let dy = -1; dy <= 1; dy++) {
           for (let dx = -1; dx <= 1; dx++) {
             if (dx === 0 && dy === 0) continue
-            const nx = x + dx
-            const ny = y + dy
-            if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue
-            const v = lum[ny * width + nx]
+            const v = lum[(y + dy) * width + (x + dx)]
             if (v > maxN) maxN = v
           }
         }
         const contrast = maxN - L
-
         const ch = chromaAt(data, o)
-        // Soft shadow fills without an edge become mottled walls on photos —
-        // demand contrast (or true near-black) before marking interior ink.
-        const nearBlack =
-          L <= inkCeil * 0.5 &&
-          ch < 32 &&
-          (!photoLike || contrast >= contrastMin * 0.55 || L <= 16)
+
+        const nearBlack = L <= inkCeil * 0.55 && ch < (inkedCartoon ? 30 : 32)
         const darkEdge = L <= inkCeil && contrast >= contrastMin
-        // Mid-tone panel/fold edges only — needs a clear step, not shading grit.
-        const midEdge =
-          !photoLike &&
-          L <= inkCeil + 22 &&
-          contrast >= contrastMin + 10
         const strongInk = L <= 18
-        // Pure line-art: any sufficiently dark low-chroma pixel is ink.
         const lineInk = lineArt && L <= inkCeil && ch < 40
-        // Navy hair / deep reds: dark enough but high chroma — must not be
-        // dropped by the nearBlack chroma gate or hair loses its silhouette.
+
+        // Pre-inked cartoons: ONLY real black strokes — never mid-tones /
+        // chromatic fills (those become speckled walls when hollowed).
+        if (inkedCartoon) {
+          if (nearBlack || strongInk || (darkEdge && ch < 36)) mask[i] = 255
+          continue
+        }
+
+        const midEdge =
+          !photoLike && L <= inkCeil + 18 && contrast >= contrastMin + 12
+        // Navy hair / deep reds — only when not already ink-lined art.
         const darkChromaticFill =
-          L <= 48 + t * 45 &&
-          ch >= 16 &&
-          (!photoLike || contrast >= contrastMin * 0.45 || L <= 28)
+          L <= 45 + t * 40 &&
+          ch >= 18 &&
+          (!photoLike || contrast >= contrastMin * 0.5 || L <= 26)
 
         if (
           nearBlack ||
@@ -494,21 +513,16 @@ function extractInkMask(
     }
   }
 
-  // Outer die edge for product photos / color art against white paper.
-  // Skip only on true low-chroma line art (would fatten every hatch).
-  if (!lineArt || avgChroma >= 14) {
+  // Outer die edge only for flat color / product photos — never on drawn ink
+  // (fattening every hatch) or pre-inked cartoons (jagged outer blob).
+  if (!lineArt && !inkedCartoon) {
     addSilhouetteRing(mask, data, lum, width, height)
-    addDarkOnLightContours(
-      mask,
-      data,
-      lum,
-      width,
-      height,
-      photoLike ? 48 + t * 40 : 55 + t * 48,
-    )
+    if (!photoLike) {
+      addDarkOnLightContours(mask, data, lum, width, height, 50 + t * 40)
+    }
   }
 
-  return { mask, lineArt, avgChroma }
+  return { mask, lineArt, avgChroma, inkedCartoon }
 }
 
 function chromaAt(data: Uint8ClampedArray, o: number): number {
@@ -688,6 +702,23 @@ function removeIsolatedInk(
   return out
 }
 
+/** 3×3 majority vote — kills single-pixel jaggies without shifting stroke center. */
+function majorityClean(mask: Uint8Array, w: number, h: number): Uint8Array {
+  const out = new Uint8Array(mask)
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      let on = 0
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (mask[(y + dy) * w + (x + dx)]) on++
+        }
+      }
+      out[y * w + x] = on >= 5 ? 255 : 0
+    }
+  }
+  return out
+}
+
 function dilate(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
   if (radius < 0.05) return mask
   const out = new Uint8Array(mask)
@@ -736,9 +767,4 @@ function erode(mask: Uint8Array, w: number, h: number, radius: number): Uint8Arr
 /** Dilate then erode — seals hairline gaps / nicks. */
 function morphClose(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
   return erode(dilate(mask, w, h, radius), w, h, radius)
-}
-
-/** Erode then dilate — drops speckles and jagged fringe. */
-function morphOpen(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
-  return dilate(erode(mask, w, h, radius), w, h, radius)
 }

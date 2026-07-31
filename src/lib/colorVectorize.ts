@@ -61,7 +61,7 @@ export const DEFAULT_COLOR_VECTOR_SETTINGS: ColorVectorSettings = {
   smoothness: 1,
   maxDim: 1000,
   snapToPms: true,
-  pmsTolerance: 10,
+  pmsTolerance: 12,
 }
 
 /** Map detail retention slider → cleanup / trace knobs. */
