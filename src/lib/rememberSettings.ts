@@ -42,8 +42,9 @@ export function sanitizeSettings(raw: unknown): DualOutputSettings {
       base.outline.sensitivity = Math.max(0, Math.min(100, o.outline.sensitivity))
     }
     if (isFiniteNumber(o.outline.thickness)) {
-      base.outline.thickness =
-        Math.round(Math.max(0, Math.min(6, o.outline.thickness)) * 100) / 100
+      // Floor at 0.1px; migrate older 0 saves up to the new minimum.
+      const raw = Math.max(0.1, Math.min(6, o.outline.thickness || 0.1))
+      base.outline.thickness = Math.round(raw * 100) / 100
     }
     if (typeof o.outline.invert === 'boolean') {
       base.outline.invert = o.outline.invert

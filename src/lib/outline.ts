@@ -9,7 +9,7 @@ export type OutlineSettings = {
    * Higher = includes lighter hatches / thinner strokes.
    */
   sensitivity: number
-  /** Extra stroke thicken in pixels (0–6, decimal). Prefer 0–1 for clean Vectorizer-style die-lines. */
+  /** Extra stroke thicken in pixels (0.1–6, decimal). Prefer ~0.1–1 for clean Vectorizer-style die-lines. */
   thickness: number
   /** Invert: white strokes on transparent instead of black. */
   invert: boolean
@@ -19,7 +19,7 @@ export type OutlineSettings = {
 
 export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
   sensitivity: 48,
-  thickness: 0,
+  thickness: 0.1,
   invert: false,
   maxDim: 1600,
 }
@@ -92,22 +92,15 @@ export async function extractOutlinePng(
     // around polka dots that we must keep.
     mask = removeIsolatedInk(mask, w, h)
   } else {
-    // Color pin art often has large black enamel fills. Hollow those into
-    // metal-wall strokes so Outline is a die-line plate, not a flooded silhouette.
-    // Thin strokes (< ~5px) survive intact; solid fills become perimeter walls.
-    mask = toStrokeWalls(mask, w, h, 2)
-    mask = dilate(mask, w, h, 1)
-    mask = majorityClean(mask, w, h)
-    mask = removeSmallComponents(mask, w, h, Math.max(10, Math.round(w * h * 0.00003)))
+    // Color pin art: hollow solid black fills into metal walls, but KEEP rings
+    // around internal white islands (polka dots). Never majority-fill holes.
+    mask = toStrokeWallsPreserveHoles(mask, w, h, 1)
+    mask = removeIsolatedInk(mask, w, h)
+    mask = removeSmallComponents(mask, w, h, Math.max(4, Math.round(w * h * 0.00001)))
   }
 
-  const thickness = Math.max(0, Math.min(6, settings.thickness))
-  if (thickness >= 0.05) {
-    mask = dilate(mask, w, h, thickness)
-  } else if (!lineArt) {
-    // Default ~1px wall weight so die-lines stay readable after Potrace.
-    mask = dilate(mask, w, h, 1)
-  }
+  const thickness = Math.max(0.1, Math.min(6, settings.thickness))
+  mask = dilate(mask, w, h, thickness)
 
   // Soft enamel outline plate is always pure black (or white if inverted).
   const stroke: Rgb = settings.invert
@@ -170,6 +163,75 @@ function toStrokeWalls(
   const out = new Uint8Array(w * h)
   for (let i = 0; i < w * h; i++) {
     if (dark[i] && !eroded[i]) out[i] = 255
+  }
+  return out
+}
+
+/**
+ * Like toStrokeWalls, but force a 1px ring around every internal white island
+ * (polka dots, face gaps) so small holes aren't erased by erosion.
+ */
+function toStrokeWallsPreserveHoles(
+  dark: Uint8Array,
+  w: number,
+  h: number,
+  radius: number,
+): Uint8Array {
+  const walls = toStrokeWalls(dark, w, h, radius)
+  const out = new Uint8Array(walls)
+  const seen = new Uint8Array(w * h)
+  const stack: number[] = []
+
+  for (let i = 0; i < w * h; i++) {
+    // Only consider white pixels that are fully inside (not edge-connected to frame).
+    if (dark[i] || seen[i]) continue
+    stack.length = 0
+    stack.push(i)
+    seen[i] = 1
+    const hole: number[] = []
+    let touchesFrame = false
+    while (stack.length) {
+      const cur = stack.pop()!
+      hole.push(cur)
+      const x = cur % w
+      const y = (cur / w) | 0
+      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) touchesFrame = true
+      for (const [nx, ny] of [
+        [x - 1, y],
+        [x + 1, y],
+        [x, y - 1],
+        [x, y + 1],
+      ] as const) {
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) {
+          touchesFrame = true
+          continue
+        }
+        const ni = ny * w + nx
+        if (seen[ni] || dark[ni]) continue
+        seen[ni] = 1
+        stack.push(ni)
+      }
+    }
+    if (touchesFrame) continue
+    // Internal white island (polka): paint a 1px ink ring on its border.
+    for (const cur of hole) {
+      const x = cur % w
+      const y = (cur / w) | 0
+      for (const [nx, ny] of [
+        [x - 1, y],
+        [x + 1, y],
+        [x, y - 1],
+        [x, y + 1],
+        [x - 1, y - 1],
+        [x + 1, y - 1],
+        [x - 1, y + 1],
+        [x + 1, y + 1],
+      ] as const) {
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+        const ni = ny * w + nx
+        if (dark[ni]) out[ni] = 255
+      }
+    }
   }
   return out
 }
@@ -428,25 +490,6 @@ function removeSmallComponents(
     }
     if (comp.length < minArea) {
       for (const p of comp) out[p] = 0
-    }
-  }
-  return out
-}
-
-function majorityClean(mask: Uint8Array, w: number, h: number): Uint8Array {
-  const out = new Uint8Array(mask)
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      const i = y * w + x
-      let on = 0
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (mask[(y + dy) * w + (x + dx)]) on++
-        }
-      }
-      // Remove isolated 1-px grit; keep real strokes
-      if (mask[i] && on <= 2) out[i] = 0
-      else if (!mask[i] && on >= 7) out[i] = 255
     }
   }
   return out

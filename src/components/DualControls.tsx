@@ -124,21 +124,21 @@ export function DualControls({
         </label>
         <input
           type="range"
-          min={0}
+          min={0.1}
           max={6}
           step="any"
           value={settings.outline.thickness}
           disabled={disabled}
           onChange={(e) => {
             const thickness =
-              Math.round(Math.max(0, Math.min(6, Number(e.target.value))) * 100) / 100
+              Math.round(Math.max(0.1, Math.min(6, Number(e.target.value))) * 100) / 100
             patchOutline({ thickness })
           }}
         />
       </div>
       <p className="hint">
-        Free 0–6px decimal. Extra wall weight after die-line extraction — metal-wall
-        strokes only, not flooded black fills.
+        Free 0.1–6px decimal. 0.1px is the finest hairline; raise for heavier metal
+        walls. Reprocess to apply.
       </p>
 
       <h2>Color vector (SVG)</h2>
