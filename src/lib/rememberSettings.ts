@@ -3,7 +3,7 @@ import {
   type DualOutputSettings,
 } from './pipeline'
 
-const STORAGE_KEY = 'enamel-pin-creator.settings.v1'
+const STORAGE_KEY = 'enamel-pin-creator.settings.v2'
 
 export type RememberedSettings = {
   savedAt: string
@@ -58,13 +58,20 @@ export function sanitizeSettings(raw: unknown): DualOutputSettings {
 
 export function loadRememberedSettings(): RememberedSettings | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw =
+      localStorage.getItem(STORAGE_KEY) ??
+      localStorage.getItem('enamel-pin-creator.settings.v1')
     if (!raw) return null
     const parsed = JSON.parse(raw) as { savedAt?: string; settings?: unknown }
-    return {
+    const remembered: RememberedSettings = {
       savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : new Date().toISOString(),
       settings: sanitizeSettings(parsed.settings),
     }
+    // Migrate v1 → v2 so auto-save continues on the new key.
+    if (!localStorage.getItem(STORAGE_KEY)) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(remembered))
+    }
+    return remembered
   } catch {
     return null
   }

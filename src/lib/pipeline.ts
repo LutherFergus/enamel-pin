@@ -12,6 +12,7 @@ import {
   type OutlineResult,
   type OutlineSettings,
 } from './outline'
+import { composeProofSvg, revokeProof, type ProofSvg } from './proofSvg'
 
 export type DualOutputSettings = {
   outline: OutlineSettings
@@ -26,6 +27,7 @@ export const DEFAULT_DUAL_SETTINGS: DualOutputSettings = {
 export type DualOutputResult = {
   outline: OutlineResult
   vector: ColorVectorResult
+  proof: ProofSvg
 }
 
 export async function createDualOutputs(
@@ -38,23 +40,33 @@ export async function createDualOutputs(
     extractOutlinePng(source, settings.outline),
     vectorizeColors(source, settings.vector, merges, overrides),
   ])
-  return { outline, vector }
+  return {
+    outline,
+    vector,
+    proof: composeProofSvg(vector.svg, outline.svg),
+  }
 }
 
 export async function remergeVector(
-  previous: ColorVectorResult,
+  previous: DualOutputResult,
   merges: Array<[number, number]>,
   smoothness: number,
   snapToPms: boolean,
   overrides: PmsOverrides = {},
-): Promise<ColorVectorResult> {
-  return applyPaletteMerges(
-    previous.state,
+): Promise<DualOutputResult> {
+  const vector = await applyPaletteMerges(
+    previous.vector.state,
     merges,
     smoothness,
     snapToPms,
     overrides,
   )
+  revokeProof(previous.proof)
+  return {
+    outline: previous.outline,
+    vector,
+    proof: composeProofSvg(vector.svg, previous.outline.svg),
+  }
 }
 
 export function revokeDualUrls(result: DualOutputResult | null) {
@@ -62,4 +74,5 @@ export function revokeDualUrls(result: DualOutputResult | null) {
   URL.revokeObjectURL(result.outline.pngUrl)
   URL.revokeObjectURL(result.outline.svgUrl)
   URL.revokeObjectURL(result.vector.svgUrl)
+  revokeProof(result.proof)
 }

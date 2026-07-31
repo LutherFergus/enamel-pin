@@ -358,8 +358,9 @@ img {
   width: 100%;
 }
 
-.source-tabs .tab {
-  flex: 1;
+.preview-panel .tabs .tab {
+  padding: 0.35rem 0.7rem;
+  font-size: 0.8rem;
 }
 
 .field textarea {

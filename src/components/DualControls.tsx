@@ -4,20 +4,16 @@ type Props = {
   settings: DualOutputSettings
   onChange: (next: DualOutputSettings) => void
   disabled?: boolean
-  remembered?: boolean
-  rememberedLabel?: string | null
-  onRemember?: () => void
-  onForget?: () => void
+  savedLabel?: string | null
+  onResetDefaults?: () => void
 }
 
 export function DualControls({
   settings,
   onChange,
   disabled,
-  remembered = false,
-  rememberedLabel = null,
-  onRemember,
-  onForget,
+  savedLabel = null,
+  onResetDefaults,
 }: Props) {
   const patchOutline = (partial: Partial<DualOutputSettings['outline']>) => {
     onChange({ ...settings, outline: { ...settings.outline, ...partial } })
@@ -34,25 +30,17 @@ export function DualControls({
           <button
             type="button"
             className="btn btn-secondary remember-btn"
-            onClick={onRemember}
-            disabled={disabled || !onRemember}
-          >
-            Remember settings
-          </button>
-          <button
-            type="button"
-            className="btn btn-secondary remember-btn"
-            onClick={onForget}
-            disabled={disabled || !remembered || !onForget}
+            onClick={onResetDefaults}
+            disabled={disabled || !onResetDefaults}
           >
             Reset defaults
           </button>
         </div>
       </div>
-      <p className={`hint remember-status ${remembered ? 'saved' : ''}`}>
-        {remembered
-          ? `Saved on this device${rememberedLabel ? ` · ${rememberedLabel}` : ''}. Reloads will reuse these sliders.`
-          : 'Not saved yet — click Remember settings to keep these sliders after refresh.'}
+      <p className="hint remember-status saved">
+        Auto-saves on this device
+        {savedLabel ? ` · last change ${savedLabel}` : ''}. Reloads restore your
+        latest sliders.
       </p>
 
       <h2>Stroke outline (SVG + PNG)</h2>

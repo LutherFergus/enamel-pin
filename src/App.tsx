@@ -45,8 +45,7 @@ export default function App() {
   const [settings, setSettings] = useState<DualOutputSettings>(
     () => initialSettings(),
   )
-  const [remembered, setRemembered] = useState(Boolean(rememberedBoot))
-  const [rememberedLabel, setRememberedLabel] = useState<string | null>(
+  const [savedLabel, setSavedLabel] = useState<string | null>(
     rememberedBoot ? formatSavedAt(rememberedBoot.savedAt) : null,
   )
   const [sourceMode, setSourceMode] = useState<SourceMode>('upload')
@@ -58,7 +57,7 @@ export default function App() {
   const [pmsOverrides, setPmsOverrides] = useState<PmsOverrides>({})
   const [chartOpen, setChartOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<PreviewTab>('vector')
+  const [viewMode, setViewMode] = useState<PreviewTab>('source')
   const [isPending, startTransition] = useTransition()
   const [busy, setBusy] = useState(false)
 
@@ -68,6 +67,12 @@ export default function App() {
       revokeDualUrls(result)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- unmount cleanup only
+  }, [])
+
+  const onSettingsChange = useCallback((next: DualOutputSettings) => {
+    setSettings(next)
+    const saved = rememberSettings(next)
+    setSavedLabel(formatSavedAt(saved.savedAt))
   }, [])
 
   const refreshVector = useCallback(
@@ -80,8 +85,8 @@ export default function App() {
       setBusy(true)
       setError(null)
       try {
-        const vector = await remergeVector(
-          result.vector,
+        const next = await remergeVector(
+          result,
           nextMerges,
           nextSettings.vector.smoothness,
           nextSettings.vector.snapToPms,
@@ -90,8 +95,9 @@ export default function App() {
         startTransition(() => {
           setResult((prev) => {
             if (!prev) return prev
+            // remergeVector already revoked previous proof; revoke old vector URL
             URL.revokeObjectURL(prev.vector.svgUrl)
-            return { ...prev, vector }
+            return next
           })
           setViewMode('vector')
         })
@@ -126,7 +132,7 @@ export default function App() {
             revokeDualUrls(prev)
             return next
           })
-          setViewMode('vector')
+          setViewMode('proof')
         })
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Processing failed')
@@ -205,17 +211,12 @@ export default function App() {
     [merges, pmsOverrides, refreshVector],
   )
 
-  const onRememberSettings = useCallback(() => {
-    const saved = rememberSettings(settings)
-    setRemembered(true)
-    setRememberedLabel(formatSavedAt(saved.savedAt))
-  }, [settings])
-
-  const onForgetSettings = useCallback(() => {
+  const onResetDefaults = useCallback(() => {
     forgetRememberedSettings()
-    setSettings(structuredClone(DEFAULT_DUAL_SETTINGS))
-    setRemembered(false)
-    setRememberedLabel(null)
+    const defaults = structuredClone(DEFAULT_DUAL_SETTINGS)
+    setSettings(defaults)
+    const saved = rememberSettings(defaults)
+    setSavedLabel(formatSavedAt(saved.savedAt))
   }, [])
 
   const downloadOutline = useCallback(() => {
@@ -233,15 +234,22 @@ export default function App() {
     downloadBlob(result.vector.svgBlob, `${sourceName}-vector.svg`)
   }, [result, sourceName])
 
+  const downloadProof = useCallback(() => {
+    if (!result) return
+    downloadBlob(result.proof.svgBlob, `${sourceName}-proof.svg`)
+  }, [result, sourceName])
+
   const statusText = useMemo(() => {
     if (busy || isPending) return 'Building stroke outline and color vector…'
     if (error) return error
     if (!result) return 'Upload an image or generate one with AI'
+    if (viewMode === 'source') return 'Original artwork'
     if (viewMode === 'outline') {
-      return `Outline SVG · ${result.outline.widthPx}×${result.outline.heightPx} · ${result.outline.pathCount} paths · transparent`
+      return `Outline SVG · ${result.outline.widthPx}×${result.outline.heightPx} · ${result.outline.pathCount} paths · #000000`
     }
-    if (viewMode === 'source') {
-      return 'Source artwork'
+    if (viewMode === 'proof') {
+      const pmsCount = result.vector.palette.filter((c) => c.pmsCode).length
+      return `Proof SVG · vector (${result.vector.palette.length} fills / ${pmsCount} PMS) + outline (${result.outline.pathCount} paths)`
     }
     const pmsCount = result.vector.palette.filter((c) => c.pmsCode).length
     return `Vector SVG · ${result.vector.palette.length} fills · ${pmsCount} PMS · ${result.vector.regionCount} shapes`
@@ -256,7 +264,7 @@ export default function App() {
         </div>
         <p className="lede">
           Upload or generate artwork for soft enamel pins, then get transparent outline
-          SVG/PNG die-lines and a flat-color vector SVG snapped to a pin-ready PMS chart.
+          SVG/PNG die-lines, a flat-color vector SVG, and a combined Proof SVG.
         </p>
       </header>
 
@@ -290,12 +298,10 @@ export default function App() {
 
           <DualControls
             settings={settings}
-            onChange={setSettings}
+            onChange={onSettingsChange}
             disabled={busy}
-            remembered={remembered}
-            rememberedLabel={rememberedLabel}
-            onRemember={onRememberSettings}
-            onForget={onForgetSettings}
+            savedLabel={savedLabel}
+            onResetDefaults={onResetDefaults}
           />
 
           <button
@@ -324,6 +330,14 @@ export default function App() {
               disabled={!sourceImage || busy}
             >
               {busy ? 'Processing…' : 'Reprocess'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={downloadProof}
+              disabled={!result || busy}
+            >
+              Download proof SVG
             </button>
             <button
               type="button"
@@ -357,6 +371,14 @@ export default function App() {
             <div className="tabs" role="tablist" aria-label="Preview mode">
               <button
                 type="button"
+                className={`tab ${viewMode === 'source' ? 'active' : ''}`}
+                onClick={() => setViewMode('source')}
+                disabled={!sourceUrl}
+              >
+                Original
+              </button>
+              <button
+                type="button"
                 className={`tab ${viewMode === 'vector' ? 'active' : ''}`}
                 onClick={() => setViewMode('vector')}
                 disabled={!result}
@@ -373,11 +395,11 @@ export default function App() {
               </button>
               <button
                 type="button"
-                className={`tab ${viewMode === 'source' ? 'active' : ''}`}
-                onClick={() => setViewMode('source')}
-                disabled={!sourceUrl}
+                className={`tab ${viewMode === 'proof' ? 'active' : ''}`}
+                onClick={() => setViewMode('proof')}
+                disabled={!result}
               >
-                Source
+                Proof
               </button>
             </div>
             <p className={`status ${error ? 'error' : ''}`}>{statusText}</p>
