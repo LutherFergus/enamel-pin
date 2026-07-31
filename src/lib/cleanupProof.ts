@@ -1,6 +1,7 @@
 /**
- * Clean up a proof SVG: inside each closed #000000 outline cell, if more than
- * one fill color is present, flood the whole cell with the dominant color.
+ * Clean up a proof SVG: inside each closed outline cell (from the real
+ * die-line mask — not luma-guessed black), if more than one fill color is
+ * present, flood the whole cell with the dominant color.
  */
 
 import type { OutlineResult } from './outline'
@@ -26,12 +27,14 @@ export type CleanupProofResult = {
   cellCount: number
 }
 
-const BLACK_LUMA = 40
 const MIN_COLOR_SHARE = 0.04 // ignore speck colors under 4% of a cell
 
 /**
  * Rasterize the proof, unify multi-color outline cells to their dominant fill,
  * re-trace fills, and stack the existing outline back on top.
+ *
+ * Ink walls come from the outline PNG (true die-lines). Dark enamel fills like
+ * navy hair are NOT treated as metal — that was breaking Final.
  */
 export async function cleanupProofDominantCells(
   proof: ProofSvg,
@@ -39,16 +42,15 @@ export async function cleanupProofDominantCells(
   opts: CleanupProofOptions,
 ): Promise<CleanupProofResult> {
   const maxDim = Math.max(400, Math.min(1600, opts.maxDim ?? 1200))
-  const { data, w, h } = await rasterizeSvg(proof.svg, maxDim)
+  const [{ data, w, h }, inkNative] = await Promise.all([
+    rasterizeSvg(proof.svg, maxDim),
+    loadInkMaskFromOutline(outline),
+  ])
 
-  const ink = new Uint8Array(w * h)
-  for (let i = 0; i < w * h; i++) {
-    const o = i * 4
-    const a = data[o + 3]
-    if (a < 128) continue
-    const y = 0.2126 * data[o] + 0.7152 * data[o + 1] + 0.0722 * data[o + 2]
-    if (y <= BLACK_LUMA) ink[i] = 255
-  }
+  const ink =
+    inkNative.w === w && inkNative.h === h
+      ? inkNative.mask
+      : scaleMaskNearest(inkNative.mask, inkNative.w, inkNative.h, w, h)
 
   const palette = (opts.palette ?? []).filter((c) => c.enabled !== false)
   const { cellLabels, fillRgb, metaByIndex, cellsFixed, cellCount } =
@@ -73,6 +75,45 @@ export async function cleanupProofDominantCells(
   }
 }
 
+async function loadInkMaskFromOutline(
+  outline: OutlineResult,
+): Promise<{ mask: Uint8Array; w: number; h: number }> {
+  const bmp = await createImageBitmap(outline.pngBlob)
+  const w = bmp.width
+  const h = bmp.height
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!
+  ctx.drawImage(bmp, 0, 0)
+  bmp.close?.()
+  const data = ctx.getImageData(0, 0, w, h).data
+  const mask = new Uint8Array(w * h)
+  for (let i = 0; i < w * h; i++) {
+    // Outline PNG is transparent non-ink; opaque = metal wall.
+    mask[i] = data[i * 4 + 3] >= 128 ? 255 : 0
+  }
+  return { mask, w, h }
+}
+
+function scaleMaskNearest(
+  mask: Uint8Array,
+  srcW: number,
+  srcH: number,
+  dstW: number,
+  dstH: number,
+): Uint8Array {
+  const out = new Uint8Array(dstW * dstH)
+  for (let y = 0; y < dstH; y++) {
+    const sy = Math.min(srcH - 1, Math.floor(((y + 0.5) * srcH) / dstH))
+    for (let x = 0; x < dstW; x++) {
+      const sx = Math.min(srcW - 1, Math.floor(((x + 0.5) * srcW) / dstW))
+      out[y * dstW + x] = mask[sy * srcW + sx]
+    }
+  }
+  return out
+}
+
 async function rasterizeSvg(
   svg: string,
   maxDim: number,
@@ -90,7 +131,9 @@ async function rasterizeSvg(
     canvas.width = w
     canvas.height = h
     const ctx = canvas.getContext('2d', { willReadFrequently: true })!
-    ctx.clearRect(0, 0, w, h)
+    // White paper under the proof so transparent exterior is distinct from fills.
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, w, h)
     ctx.drawImage(img, 0, 0, w, h)
     const imageData = ctx.getImageData(0, 0, w, h)
     return { data: imageData.data, w, h }
@@ -145,16 +188,13 @@ function floodDominantInCells(
   const n = w * h
   const exterior = markExterior(ink, w, h)
 
-  // Build working palette: provided PMS fills, else discover from raster.
-  const colors: Rgb[] = palette.map((c) => ({ r: c.r, g: c.g, b: c.b }))
   const metaByIndex = new Map<number, PaletteColor>()
   for (const c of palette) metaByIndex.set(c.index, c)
 
-  // Map palette.index → dense slot for labelsToSmoothSvg fillRgb array.
-  // Use palette.index directly when palette provided; else dense discovery.
   const usePaletteIndices = palette.length > 0
   let nextDiscover = 0
   const discoverKey = new Map<string, number>()
+  const colors: Rgb[] = palette.map((c) => ({ r: c.r, g: c.g, b: c.b }))
 
   const snap = (r: number, g: number, b: number): number => {
     if (usePaletteIndices) {
@@ -169,7 +209,6 @@ function floodDominantInCells(
       }
       return best
     }
-    // Quantize to reduce AA noise when no palette is available.
     const qr = (r / 12) | 0
     const qg = (g / 12) | 0
     const qb = (b / 12) | 0
@@ -225,20 +264,25 @@ function floodDominantInCells(
       const i = stack.pop()!
       cell.push(i)
       const o = i * 4
+      // Sample every opaque non-ink pixel — including dark navy fills.
       if (data[o + 3] >= 128 && !ink[i]) {
+        // Skip near-white paper leftover inside a cell (rare).
         const y = 0.2126 * data[o] + 0.7152 * data[o + 1] + 0.0722 * data[o + 2]
-        if (y > BLACK_LUMA) {
+        const ch =
+          Math.max(data[o], data[o + 1], data[o + 2]) -
+          Math.min(data[o], data[o + 1], data[o + 2])
+        if (!(y >= 245 && ch < 12)) {
           const lab = snap(data[o], data[o + 1], data[o + 2])
           hist.set(lab, (hist.get(lab) ?? 0) + 1)
         }
       }
       const x = i % w
-      const y = (i / w) | 0
+      const yy = (i / w) | 0
       const neighbors = [
         x > 0 ? i - 1 : -1,
         x + 1 < w ? i + 1 : -1,
-        y > 0 ? i - w : -1,
-        y + 1 < h ? i + w : -1,
+        yy > 0 ? i - w : -1,
+        yy + 1 < h ? i + w : -1,
       ]
       for (const ni of neighbors) {
         if (ni < 0) continue
@@ -259,23 +303,21 @@ function floodDominantInCells(
 
     significant.sort((a, b) => b[1] - a[1])
     const dominant = significant[0][0]
-    if (significant.length > 1) cellsFixed++
+    // Only rewrite when the cell actually mixes colors.
+    if (significant.length > 1) {
+      cellsFixed++
+      for (const i of cell) cellLabels[i] = dominant
+    } else {
+      // Keep the single color; still label so the cell is traced.
+      for (const i of cell) cellLabels[i] = dominant
+    }
 
     cellCount++
-    for (const i of cell) {
-      cellLabels[i] = dominant
-    }
-
-    if (!usePaletteIndices && !fillRgb[dominant]) {
-      // already set during discover
-    }
   }
-
-  const finalFills = usePaletteIndices ? fillRgb : colors
 
   return {
     cellLabels,
-    fillRgb: finalFills,
+    fillRgb: usePaletteIndices ? fillRgb : colors,
     metaByIndex,
     cellsFixed,
     cellCount,
