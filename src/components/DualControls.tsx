@@ -137,7 +137,7 @@ export function DualControls({
         />
       </div>
       <p className="hint">
-        Relative to a fixed working size so weight stays consistent across photos.
+        Working size is normalized so weight stays consistent across photos.
         0.1px is the finest hairline. Reprocess to apply.
       </p>
 

@@ -113,7 +113,7 @@ export async function extractOutlinePng(
     // Line art keeps flecks — polka rim ticks are often only a few pixels.
     const minSpeck = !treatAsColorArt
       ? Math.max(2, Math.round(w * h * 0.000002))
-      : Math.max(8, Math.round(w * h * 0.00002))
+      : Math.max(14, Math.round(w * h * 0.000045))
     mask = removeSmallComponents(mask, w, h, minSpeck)
   }
 
@@ -126,20 +126,19 @@ export async function extractOutlinePng(
     // Color art: hollow solid dark fills (hair, deep reds) into metal walls so
     // the outline plate traces the silhouette instead of skipping chromatic darks.
     mask = toStrokeWallsPreserveHoles(mask, w, h, 1)
-    mask = removeIsolatedInk(mask, w, h, 1)
-    mask = removeSmallComponents(mask, w, h, Math.max(3, Math.round(w * h * 0.000006)))
+    // Photo texture leaves crumbly 1–2px ink — scrub before thicken.
+    mask = removeIsolatedInk(mask, w, h, 2)
+    mask = removeSmallComponents(mask, w, h, Math.max(8, Math.round(w * h * 0.00002)))
   }
 
-  // Thickness is relative to a fixed reference canvas so the same slider looks
-  // consistent across source resolutions (working size is always ~maxDim).
-  const REFERENCE_DIM = 1000
-  const thicknessPx = Math.max(0.1, Math.min(6, settings.thickness))
-  const scale = Math.max(w, h) / REFERENCE_DIM
-  const thickness = thicknessPx * scale
+  // Sources are normalized to maxDim above, so thickness in px is already
+  // resolution-stable — do not multiply by canvas size again (that bloated
+  // stroke weight ~1.6× and merged neighboring walls into blotches).
+  const thickness = Math.max(0.1, Math.min(6, settings.thickness))
   if (thickness >= 0.15) {
     mask = dilate(mask, w, h, thickness)
   } else if (treatAsColorArt) {
-    mask = dilate(mask, w, h, Math.max(1, scale))
+    mask = dilate(mask, w, h, 1)
   }
 
   // Soft enamel outline plate is always pure black (or white if inverted).
@@ -312,14 +311,14 @@ async function maskToTransparentSvg(
     .map((v) => v.toString(16).padStart(2, '0'))
     .join('')}`
 
-  // Keep turdsize low so fine black details survive; white holes are topology.
-  const turdsize = Math.max(2, Math.round(tw * th * 0.000002))
+  // Drop fleck paths from photo grit; keep white holes as topology.
+  const turdsize = Math.max(4, Math.round(tw * th * 0.000006))
   const traced = await potrace(bw, {
     turdsize,
     turnpolicy: 4,
-    alphamax: 0.88,
+    alphamax: 0.92,
     opticurve: 1,
-    opttolerance: 0.2,
+    opttolerance: 0.28,
     pathonly: false,
     extractcolors: false,
   })
@@ -402,21 +401,21 @@ function extractInkMask(
     (darkish + lightish) / opaque > 0.82
 
   const t = Math.max(0, Math.min(100, sensitivity)) / 100
-  // Color art: open inkCeil so mid-dark garment/feature edges still wall.
-  const inkCeil = lineArt ? 55 + t * 100 : 40 + t * 70
-  const contrastMin = lineArt ? 6 + (1 - t) * 14 : 10 + (1 - t) * 18
+  // Color art: enough range for garment edges, not so open midtones become texture ink.
+  const inkCeil = lineArt ? 55 + t * 100 : 32 + t * 58
+  const contrastMin = lineArt ? 6 + (1 - t) * 14 : 12 + (1 - t) * 20
 
   // Pure B&W line art (no mid-gray AA): copy ink 1:1 so polka holes and micro
   // strokes match the source bitmap before Potrace (imaengine / Vectorizer target).
   let midGray = 0
-  if (lineArt) {
-    for (let i = 0; i < n; i++) {
-      if (data[i * 4 + 3] < 128) continue
-      const L = lum[i]
-      if (L >= 40 && L <= 215) midGray++
-    }
+  for (let i = 0; i < n; i++) {
+    if (data[i * 4 + 3] < 128) continue
+    const L = lum[i]
+    if (L >= 40 && L <= 215) midGray++
   }
   const pureBinary = lineArt && opaque > 0 && midGray / opaque < 0.002
+  // Photo / soft-shaded art: lots of mid-gray — require real edges, not soft fills.
+  const photoLike = !lineArt && opaque > 0 && midGray / opaque > 0.28
 
   const mask = new Uint8Array(n)
   if (pureBinary) {
@@ -433,10 +432,9 @@ function extractInkMask(
         if (data[o + 3] < 128) continue
 
         const L = lum[i]
-        if (L > inkCeil + 55) continue
+        if (L > inkCeil + 40) continue
 
         let maxN = L
-        let minN = L
         for (let dy = -1; dy <= 1; dy++) {
           for (let dx = -1; dx <= 1; dx++) {
             if (dx === 0 && dy === 0) continue
@@ -445,22 +443,32 @@ function extractInkMask(
             if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue
             const v = lum[ny * width + nx]
             if (v > maxN) maxN = v
-            if (v < minN) minN = v
           }
         }
         const contrast = maxN - L
 
         const ch = chromaAt(data, o)
-        const nearBlack = L <= inkCeil * 0.55 && ch < 35
+        // Soft shadow fills without an edge become mottled walls on photos —
+        // demand contrast (or true near-black) before marking interior ink.
+        const nearBlack =
+          L <= inkCeil * 0.5 &&
+          ch < 32 &&
+          (!photoLike || contrast >= contrastMin * 0.55 || L <= 16)
         const darkEdge = L <= inkCeil && contrast >= contrastMin
-        // Mid-tone edges on mid fills (panels, folds) — not only deep darks.
-        const midEdge = L <= inkCeil + 45 && contrast >= contrastMin + 4
-        const strongInk = L <= 22
+        // Mid-tone panel/fold edges only — needs a clear step, not shading grit.
+        const midEdge =
+          !photoLike &&
+          L <= inkCeil + 28 &&
+          contrast >= contrastMin + 8
+        const strongInk = L <= 18
         // Pure line-art: any sufficiently dark low-chroma pixel is ink.
         const lineInk = lineArt && L <= inkCeil && ch < 40
         // Navy hair / deep reds: dark enough but high chroma — must not be
         // dropped by the nearBlack chroma gate or hair loses its silhouette.
-        const darkChromaticFill = L <= 55 + t * 55 && ch >= 14
+        const darkChromaticFill =
+          L <= 48 + t * 45 &&
+          ch >= 16 &&
+          (!photoLike || contrast >= contrastMin * 0.45 || L <= 28)
 
         if (
           nearBlack ||
@@ -480,7 +488,14 @@ function extractInkMask(
   // Skip only on true low-chroma line art (would fatten every hatch).
   if (!lineArt || avgChroma >= 14) {
     addSilhouetteRing(mask, data, lum, width, height)
-    addDarkOnLightContours(mask, data, lum, width, height, 70 + t * 55)
+    addDarkOnLightContours(
+      mask,
+      data,
+      lum,
+      width,
+      height,
+      photoLike ? 48 + t * 40 : 55 + t * 48,
+    )
   }
 
   return { mask, lineArt, avgChroma }
