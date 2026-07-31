@@ -1,3 +1,4 @@
+import { isSkinTone, skinScore } from './background'
 import type { Rgb } from './types'
 import { colorDistance } from './types'
 
@@ -22,20 +23,9 @@ function isNeutral(c: Rgb): boolean {
   return chroma(c) < 28
 }
 
-/**
- * Skin / flesh likeness (Vectorizer refs keep peach + warm brown even when
- * they are minority area vs metal grays).
- */
-function skinScore(c: Rgb): number {
-  const L = luminance(c)
-  const ch = chroma(c)
-  if (L < 55 || L > 245 || ch < 18 || ch > 120) return 0
-  // Warm: R > G >= B typical for peach/tan
-  if (c.r < c.g + 8) return 0
-  if (c.b > c.g + 10) return 0
-  const warm = (c.r - c.b) / 255
-  if (warm < 0.08) return 0
-  return warm * (1 - Math.abs(L - 180) / 180) * (ch / 80)
+/** Leftover studio white after imperfect knockout — don't spend a palette slot. */
+function isLeftoverBackdrop(c: Rgb): boolean {
+  return luminance(c) >= 248 && chroma(c) <= 12 && !isSkinTone(c)
 }
 
 function isAccent(c: Rgb): boolean {
@@ -103,12 +93,13 @@ export function extractPalette(
       const g = data[i + 1]
       const b = data[i + 2]
       const pixel = { r, g, b }
+      if (isLeftoverBackdrop(pixel)) continue
       const ch = chroma(pixel) / 255
       const skin = skinScore(pixel)
       const dist = Math.hypot(x - cx, y - cy) / maxDist
       // Center/subject bias + strong chroma/skin boost (refs keep reds & flesh).
       const spatial = 0.55 + 0.45 * (1 - dist)
-      const importance = spatial * (1 + 4.2 * ch * ch + 3.5 * skin)
+      const importance = spatial * (1 + 4.2 * ch * ch + 5.5 * skin)
 
       const br = Math.min(BIN - 1, (r * BIN) >> 8)
       const bg = Math.min(BIN - 1, (g * BIN) >> 8)
@@ -390,12 +381,17 @@ export function quantizeImage(imageData: ImageData, palette: Rgb[]): Uint16Array
       continue
     }
     const pixel = { r: data[o], g: data[o + 1], b: data[o + 2] }
+    if (isLeftoverBackdrop(pixel)) {
+      labels[i] = 0xffff
+      continue
+    }
     let best = 0
     let bestDist = Infinity
     for (let c = 0; c < palette.length; c++) {
       let d = colorDistance(pixel, palette[c])
       // Keep reds/skin from snapping into nearby grays.
-      if (isNeutral(palette[c]) && chroma(pixel) > 40) d += 22
+      if (isNeutral(palette[c]) && (chroma(pixel) > 40 || isSkinTone(pixel))) d += 28
+      if (isSkinTone(pixel) && !isSkinTone(palette[c]) && chroma(palette[c]) < 35) d += 35
       if (d < bestDist) {
         bestDist = d
         best = c

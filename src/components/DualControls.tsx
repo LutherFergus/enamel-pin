@@ -57,8 +57,8 @@ export function DualControls({
         <span>Remove background</span>
       </label>
       <p className="hint">
-        Clears solid studio/product backdrops (edge flood) so they don’t steal
-        palette slots or muddy the outline. Hit Reprocess after changing.
+        Clears solid studio backdrops without touching skin tones. Hit Reprocess
+        after changing.
       </p>
       {settings.removeBackground && (
         <div className="field">
@@ -81,7 +81,7 @@ export function DualControls({
       )}
       {settings.removeBackground && (
         <p className="hint">
-          Higher = more aggressive knockout. Lower if hair/edges get eaten.
+          Higher = more aggressive knockout. Skin tones are always protected.
         </p>
       )}
 
