@@ -88,6 +88,11 @@ export async function extractOutlinePng(
   if (lineArt) {
     // Vectorizer-style B&W: never fill white islands (polka dots, spokes, face).
     mask = removeIsolatedInk(mask, w, h)
+    // At high detail, AA bridges between parallel strokes can clump lines —
+    // open 1px ink bridges so white gaps stay open.
+    if (settings.sensitivity >= 70) {
+      mask = breakInkBridges(mask, w, h)
+    }
   } else {
     // Color pin art often has large black enamel fills. Hollow those into
     // metal-wall strokes so Outline is a die-line plate, not a flooded silhouette.
@@ -296,8 +301,10 @@ function extractInkMask(
     (darkish + lightish) / opaque > 0.82
 
   const t = Math.max(0, Math.min(100, sensitivity)) / 100
-  const inkCeil = lineArt ? 55 + t * 100 : 28 + t * 55
-  const contrastMin = lineArt ? 6 + (1 - t) * 14 : 14 + (1 - t) * 22
+  // Higher detail should pick up thin dark hatches — not flood mid-gray AA that
+  // bridges parallel strokes (that "clumps" lines at hugest detail).
+  const inkCeil = lineArt ? 40 + t * 36 : 26 + t * 48
+  const contrastMin = lineArt ? 10 + (1 - t) * 14 : 14 + (1 - t) * 22
 
   const mask = new Uint8Array(n)
   for (let y = 1; y < height - 1; y++) {
@@ -307,7 +314,7 @@ function extractInkMask(
       if (data[o + 3] < 128) continue
 
       const L = lum[i]
-      if (L > inkCeil + 40) continue
+      if (L > inkCeil + 24) continue
 
       let maxN = 0
       for (let dy = -1; dy <= 1; dy++) {
@@ -318,14 +325,22 @@ function extractInkMask(
         }
       }
       const contrast = maxN - L
+      const ch = chromaAt(data, o)
 
-      const nearBlack = L <= inkCeil * 0.55 && chromaAt(data, o) < 35
-      const darkEdge = L <= inkCeil && contrast >= contrastMin
+      const nearBlack = L <= 32 && ch < 35
       const strongInk = L <= 22
-      // Pure line-art: any sufficiently dark low-chroma pixel is ink.
-      const lineInk = lineArt && L <= inkCeil && chromaAt(data, o) < 40
+      // Core ink: dark enough, or a clear dark-on-light edge (thin hatches).
+      const darkCore = L <= inkCeil * 0.72 && ch < 40
+      const darkEdge = L <= inkCeil && contrast >= contrastMin && ch < 45
+      // Mid-gray AA may complete a stroke edge, but must NOT fill gaps between lines.
+      const aaEdge =
+        lineArt &&
+        L > 36 &&
+        L <= inkCeil &&
+        contrast >= contrastMin + 6 &&
+        ch < 28
 
-      if (nearBlack || darkEdge || strongInk || lineInk) mask[i] = 255
+      if (nearBlack || strongInk || darkCore || darkEdge || aaEdge) mask[i] = 255
     }
   }
 
@@ -444,6 +459,28 @@ function removeIsolatedInk(mask: Uint8Array, w: number, h: number): Uint8Array {
         }
       }
       if (on <= 2) out[i] = 0
+    }
+  }
+  return out
+}
+
+/**
+ * Remove 1px ink bridges that glue parallel strokes together (common when
+ * high detail thresholds treat anti-aliased mid-gray as solid ink).
+ */
+function breakInkBridges(mask: Uint8Array, w: number, h: number): Uint8Array {
+  const out = new Uint8Array(mask)
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x
+      if (!mask[i]) continue
+      const L = mask[i - 1]
+      const R = mask[i + 1]
+      const U = mask[i - w]
+      const D = mask[i + w]
+      const hBridge = L && R && !U && !D
+      const vBridge = U && D && !L && !R
+      if (hBridge || vBridge) out[i] = 0
     }
   }
   return out

@@ -114,8 +114,8 @@ export function DualControls({
         />
       </div>
       <p className="hint">
-        Extracts existing dark metal walls / ink. Lower = only strongest die-lines. Higher =
-        includes thinner hatches.
+        Extracts dark metal walls / ink. Higher keeps thinner hatches without
+        flooding the gaps between close lines. Reprocess to apply.
       </p>
       <div className="field">
         <label>
