@@ -7,7 +7,11 @@ import { PmsChartModal } from './components/PmsChartModal'
 import { Preview, type PreviewTab } from './components/Preview'
 import { SaveScreenshotButton } from './components/SaveScreenshotButton'
 import { generateAiImage, type PinheadsTheme } from './lib/aiGenerate'
-import type { PmsOverrides } from './lib/colorVectorize'
+import { cleanupProofDominantCells } from './lib/cleanupProof'
+import {
+  detailRetentionParams,
+  type PmsOverrides,
+} from './lib/colorVectorize'
 import {
   createDualOutputs,
   DEFAULT_DUAL_SETTINGS,
@@ -225,6 +229,48 @@ export default function App() {
     void runPipeline(sourceImage, settings, [], {}, { preserveView: true }, [])
   }, [runPipeline, settings, sourceImage])
 
+  const onCleanup = useCallback(async () => {
+    if (!result || result.vectorPending || result.vector.palette.length === 0) {
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      const { pathomitScale } = detailRetentionParams(
+        settings.vector.detailRetention,
+      )
+      const cleaned = await cleanupProofDominantCells(result.proof, result.outline, {
+        smoothness: settings.vector.smoothness,
+        pathomitScale,
+        palette: result.vector.palette,
+        maxDim: Math.max(result.outline.widthPx, result.vector.widthPx),
+      })
+      startTransition(() => {
+        setResult((prev) => {
+          if (!prev) return prev
+          URL.revokeObjectURL(prev.proof.svgUrl)
+          URL.revokeObjectURL(prev.vector.svgUrl)
+          return {
+            ...prev,
+            proof: cleaned.proof,
+            vector: {
+              ...prev.vector,
+              svg: cleaned.vectorSvg,
+              svgBlob: cleaned.vectorBlob,
+              svgUrl: URL.createObjectURL(cleaned.vectorBlob),
+              regionCount: cleaned.cellCount,
+            },
+          }
+        })
+        setViewMode('proof')
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Clean up failed')
+    } finally {
+      setBusy(false)
+    }
+  }, [result, settings])
+
   const onMergesChange = useCallback(
     async (nextMerges: Array<[number, number]>) => {
       setMerges(nextMerges)
@@ -284,7 +330,7 @@ export default function App() {
       if (result?.outline && result.vectorPending) {
         return `Outline ready · ${result.outline.pathCount} paths — building color vector…`
       }
-      return 'Building stroke outline…'
+      return 'Working…'
     }
     if (!result) return 'Upload an image or generate one with AI'
     if (viewMode === 'source') return 'Original artwork'
@@ -444,14 +490,30 @@ export default function App() {
                   Proof
                 </button>
               </div>
-              <button
-                type="button"
-                className="btn btn-primary reprocess-btn"
-                onClick={onApply}
-                disabled={!sourceImage || busy}
-              >
-                {busy ? 'Processing…' : 'Reprocess'}
-              </button>
+              <div className="preview-actions">
+                <button
+                  type="button"
+                  className="btn btn-primary reprocess-btn"
+                  onClick={onApply}
+                  disabled={!sourceImage || busy}
+                >
+                  {busy ? 'Processing…' : 'Reprocess'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary cleanup-btn"
+                  onClick={() => void onCleanup()}
+                  disabled={
+                    !result ||
+                    busy ||
+                    !!result.vectorPending ||
+                    result.vector.palette.length === 0
+                  }
+                  title="Inside each black outline cell, if more than one color is present, fill the cell with the dominant color"
+                >
+                  Clean up
+                </button>
+              </div>
             </div>
             <p className={`status ${error ? 'error' : ''}`}>{statusText}</p>
           </div>

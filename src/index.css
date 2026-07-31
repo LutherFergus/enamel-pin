@@ -441,9 +441,23 @@ img {
 
 .reprocess-btn {
   flex: 0 0 auto;
-  margin-left: auto;
   padding: 0.55rem 1.05rem;
   font-size: 0.88rem;
+}
+
+.preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.cleanup-btn {
+  flex: 0 0 auto;
+  padding: 0.55rem 1.05rem;
+  font-size: 0.88rem;
+  white-space: nowrap;
 }
 
 .palette {
