@@ -12,6 +12,7 @@ import {
   detailRetentionParams,
   type PmsOverrides,
 } from './lib/colorVectorize'
+import { exportTabLayers } from './lib/exportLayers'
 import {
   createDualOutputs,
   DEFAULT_DUAL_SETTINGS,
@@ -323,6 +324,26 @@ export default function App() {
     downloadBlob(result.final.svgBlob, `${sourceName}-final.svg`)
   }, [result, sourceName])
 
+  const [layerExportBusy, setLayerExportBusy] = useState(false)
+
+  const downloadLayers = useCallback(
+    async (format: 'psd' | 'tiff') => {
+      if (!result || result.vectorPending) return
+      setLayerExportBusy(true)
+      setError(null)
+      try {
+        const blob = await exportTabLayers({ sourceUrl, result, maxDim: 2000 }, format)
+        const ext = format === 'psd' ? 'psd' : 'tiff'
+        downloadBlob(blob, `${sourceName}-layers.${ext}`)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Layer export failed')
+      } finally {
+        setLayerExportBusy(false)
+      }
+    },
+    [result, sourceName, sourceUrl],
+  )
+
   const statusText = useMemo(() => {
     if (error) return error
     if (busy || isPending) {
@@ -462,6 +483,40 @@ export default function App() {
             >
               Download vector SVG
             </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => void downloadLayers('psd')}
+              disabled={
+                !result ||
+                busy ||
+                layerExportBusy ||
+                !!result.vectorPending ||
+                result.vector.palette.length === 0
+              }
+            >
+              {layerExportBusy ? 'Exporting layers…' : 'Download layers PSD'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => void downloadLayers('tiff')}
+              disabled={
+                !result ||
+                busy ||
+                layerExportBusy ||
+                !!result.vectorPending ||
+                result.vector.palette.length === 0
+              }
+            >
+              Download multipage TIFF
+            </button>
+            <p className="hint">
+              Packs each tab (Original, Vector, Outline, Proof, Final) into one
+              file. PSD = real Photoshop layers. TIFF = multipage (one page per
+              tab); Photoshop often shows page 1 only — Photopea/Affinity can
+              flip pages.
+            </p>
           </div>
         </aside>
 
