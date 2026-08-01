@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "ag-psd": "^31.0.2",
     "esm-potrace-wasm": "^0.5.0",
     "html-to-image": "^1.11.13",
     "imagetracerjs": "^1.2.6",
