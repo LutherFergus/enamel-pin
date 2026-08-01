@@ -95,9 +95,21 @@ export async function cleanupProofDominantCells(
   cellLabels = trapFillsUnderInk(cellLabels, ink, w, h, 3)
   cellLabels = fillEnclosedTransparent(cellLabels, data, ink, w, h)
 
+  // Whatever thin interior gaps remain → solid black #000000 (metal fill).
+  const blackened = fillRemainingGapsWithBlack(
+    cellLabels,
+    data,
+    ink,
+    w,
+    h,
+    fillRgb,
+    metaByIndex,
+  )
+  cellLabels = blackened.labels
+
   // Absolute-cubic Potrace with extra trap: dilate + matching stroke.
   const smoothness = Math.max(0, Math.min(5, opts.smoothness ?? 3))
-  const { svg: fillSvg, pathCount } = await labelsToCrispSvg(
+  const { svg: colorSvg, pathCount } = await labelsToCrispSvg(
     cellLabels,
     fillRgb,
     metaByIndex,
@@ -110,6 +122,10 @@ export async function cleanupProofDominantCells(
       skipMajorityClean: true,
     },
   )
+
+  // Black silhouette underplate: any post-trace hairline still reads #000000.
+  const underplateSvg = await blackSubjectUnderplate(data, ink, cellLabels, w, h)
+  const fillSvg = stackFillLayers(underplateSvg, colorSvg)
 
   const nextProof = composeProofSvg(fillSvg, outline.svg)
   const vectorBlob = new Blob([fillSvg], { type: 'image/svg+xml;charset=utf-8' })
@@ -378,6 +394,121 @@ function completeShapesFromLocalColor(
   }
 
   return { labels: out, regionsCompleted }
+}
+
+/**
+ * Paint every remaining interior clear / unlabeled pixel as #000000 so thin
+ * white gaps become black metal instead of showing through.
+ */
+function fillRemainingGapsWithBlack(
+  labels: Uint16Array,
+  data: Uint8ClampedArray,
+  ink: Uint8Array,
+  w: number,
+  h: number,
+  fillRgb: Rgb[],
+  metaByIndex: Map<number, PaletteColor>,
+): { labels: Uint16Array; blackIndex: number } {
+  const out = new Uint16Array(labels)
+  const exterior = markExteriorInteriorAware(data, ink, out, w, h)
+
+  let blackIndex = -1
+  for (let i = 0; i < fillRgb.length; i++) {
+    const c = fillRgb[i]
+    if (c && c.r === 0 && c.g === 0 && c.b === 0) {
+      blackIndex = i
+      break
+    }
+  }
+  if (blackIndex < 0) {
+    blackIndex = fillRgb.length
+    const rgb = { r: 0, g: 0, b: 0 }
+    fillRgb.push(rgb)
+    metaByIndex.set(blackIndex, {
+      ...rgb,
+      hex: '#000000',
+      index: blackIndex,
+      pmsName: 'Black gap fill',
+    })
+  }
+
+  for (let i = 0; i < w * h; i++) {
+    if (exterior[i]) continue
+    if (out[i] !== 0xffff) continue
+    // Interior unlabeled (and ink already trapped, or leftover fringe) → black.
+    out[i] = blackIndex
+  }
+
+  return { labels: out, blackIndex }
+}
+
+/** Full subject silhouette as a black underplate SVG (gaps show metal, not white). */
+async function blackSubjectUnderplate(
+  data: Uint8ClampedArray,
+  ink: Uint8Array,
+  labels: Uint16Array,
+  w: number,
+  h: number,
+): Promise<string> {
+  const exterior = markExteriorInteriorAware(data, ink, labels, w, h)
+  const under = new Uint16Array(w * h)
+  under.fill(0xffff)
+  for (let i = 0; i < w * h; i++) {
+    if (!exterior[i]) under[i] = 0
+  }
+  const fillRgb: Rgb[] = [{ r: 0, g: 0, b: 0 }]
+  const metaByIndex = new Map<number, PaletteColor>([
+    [0, { r: 0, g: 0, b: 0, hex: '#000000', index: 0, pmsName: 'Black underplate' }],
+  ])
+  const { svg } = await labelsToCrispSvg(under, fillRgb, metaByIndex, {
+    widthPx: w,
+    heightPx: h,
+    smoothness: 3,
+    seamDilate: 2,
+    seamStroke: 1.2,
+    skipMajorityClean: true,
+  })
+  return svg
+}
+
+/** Put underplate fills beneath color fills in one SVG. */
+function stackFillLayers(underSvg: string, colorSvg: string): string {
+  const under = underSvg
+    .replace(/<\?xml[^>]*>/gi, '')
+    .replace(/<!DOCTYPE[^>]*>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+  const color = colorSvg
+    .replace(/<\?xml[^>]*>/gi, '')
+    .replace(/<!DOCTYPE[^>]*>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+
+  const vb =
+    color.match(/viewBox="([^"]+)"/i)?.[1] ||
+    under.match(/viewBox="([^"]+)"/i)?.[1] ||
+    '0 0 1000 1000'
+  const wh = vb.trim().split(/[\s,]+/).map(Number)
+  const width = wh[2] || 1000
+  const height = wh[3] || 1000
+
+  const underInner = extractSvgInner(under)
+  const colorInner = extractSvgInner(color)
+
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" shape-rendering="geometricPrecision">`,
+    `<!-- Final fills · black underplate + enamel · gaps → #000000 -->`,
+    `<g id="black-underplate">${underInner}</g>`,
+    `<g id="enamel-fills">${colorInner}</g>`,
+    `</svg>`,
+  ].join('\n')
+}
+
+function extractSvgInner(svg: string): string {
+  const open = svg.match(/<svg\b[^>]*>/i)
+  if (!open || open.index == null) return svg.trim()
+  const start = open.index + open[0].length
+  const close = svg.lastIndexOf('</svg>')
+  if (close < start) return svg.slice(start).trim()
+  return svg.slice(start, close).trim()
 }
 
 /**
