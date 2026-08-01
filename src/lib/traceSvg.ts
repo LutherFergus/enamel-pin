@@ -55,27 +55,25 @@ export function labelsToSmoothSvg(
   const t = Math.max(0, Math.min(5, smoothness)) / 5
   const pathomitScale = Math.max(0.25, Math.min(1.75, opts.pathomitScale ?? 1))
 
-  // 2×–3× supersample: pixel stairs become sub-pixel to the fitter.
-  const superScale = smoothness >= 4 ? 3 : smoothness >= 2 ? 2 : 1
+  // Always ≥2× supersample so zoomed edges aren't 1px stairs; 3× at high smooth.
+  const superScale = smoothness >= 3 ? 3 : 2
 
   const flat = renderFlat(labels, fillRgb, w, h)
-  const imgd =
-    superScale === 1 ? flat : nearestNeighborScale(flat, w, h, superScale)
+  const imgd = nearestNeighborScale(flat, w, h, superScale)
 
   const pal = [
     ...fillRgb.map((c) => ({ r: c.r, g: c.g, b: c.b, a: 255 })),
     { r: 0, g: 0, b: 0, a: 0 },
   ]
 
-  // Aggressive tolerances → prefer long smooth arcs over pixel dogbones.
-  // (Vectorizer.AI-style: geometry first, not edge-pixel fidelity.)
-  const ltres = 1.2 + t * 7.5
-  const qtres = 1.2 + t * 7.5
+  // Micro curve fit: slightly higher tolerances → longer arcs, fewer dogbones.
+  const ltres = 1.8 + t * 7.2
+  const qtres = 1.8 + t * 7.2
   const pathomit = Math.max(
     2,
     Math.round((8 + t * 28) * superScale * pathomitScale),
   )
-  const blurradius = t >= 0.35 ? Math.min(3, 1 + Math.round(t * 2)) : 0
+  const blurradius = t >= 0.25 ? Math.min(3, 1 + Math.round(t * 2)) : 0
 
   const traced = ImageTracer.imagedataToTracedata(imgd, {
     pal,
@@ -91,7 +89,8 @@ export function labelsToSmoothSvg(
     strokewidth: 0,
     // Raw tracedata stays in supersampled px; we scale in segmentPath.
     scale: 1,
-    roundcoords: 2,
+    // Finer control-point quantization — less micro-stair on zoom.
+    roundcoords: 3,
     viewbox: true,
     desc: false,
     blurradius,
@@ -250,9 +249,9 @@ export async function labelsToCrispSvg(
     const traced = await potrace(bw, {
       turdsize: Math.max(4, turdsize * scale * scale),
       turnpolicy: 4,
-      alphamax: 1.0,
+      alphamax: 0.88,
       opticurve: 1,
-      opttolerance: 0.42,
+      opttolerance: 0.52,
       pathonly: false,
       extractcolors: false,
     })

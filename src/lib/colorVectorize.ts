@@ -71,7 +71,7 @@ export const DEFAULT_COLOR_VECTOR_SETTINGS: ColorVectorSettings = {
   detailRetention: 100,
   // Kept in sync with detailRetentionParams(100) for older readers.
   minRegionRatio: 0.00005,
-  smoothness: 1,
+  smoothness: 2,
   maxDim: 1000,
   snapToPms: true,
   pmsTolerance: 12,
@@ -661,7 +661,7 @@ export async function vectorizeColors(
     mergedPalette,
     width,
     height,
-    flat ? Math.max(settings.smoothness, 2) : settings.smoothness,
+    flat ? Math.max(settings.smoothness, 3) : Math.max(settings.smoothness, 2),
     settings.snapToPms,
     overrides,
     {

@@ -304,35 +304,42 @@ async function maskToTransparentSvg(
 ): Promise<string> {
   await ensurePotrace()
 
-  // Supersample fattens 1px strokes via nearest-neighbor — skip it so thin
-  // Vectorizer-style walls and white islands stay faithful.
-  const tw = w
-  const th = h
+  // 2× supersample: pixel stairs become sub-pixel to Potrace, then the SVG
+  // viewBox maps back to art size — microscopic curve smooth without fattening
+  // topology (scale is display-only via width/height vs viewBox).
+  const scale = 2
+  const tw = w * scale
+  const th = h * scale
   const bw = new ImageData(tw, th)
 
-  for (let i = 0; i < w * h; i++) {
-    const si = i * 4
-    const di = i * 4
-    const on = imageData.data[si + 3] >= 128
-    const v = on ? 0 : 255
-    bw.data[di] = v
-    bw.data[di + 1] = v
-    bw.data[di + 2] = v
-    bw.data[di + 3] = 255
+  for (let y = 0; y < th; y++) {
+    const sy = (y / scale) | 0
+    for (let x = 0; x < tw; x++) {
+      const sx = (x / scale) | 0
+      const on = imageData.data[(sy * w + sx) * 4 + 3] >= 128
+      const di = (y * tw + x) * 4
+      const v = on ? 0 : 255
+      bw.data[di] = v
+      bw.data[di + 1] = v
+      bw.data[di + 2] = v
+      bw.data[di + 3] = 255
+    }
   }
 
   const inkHex = `#${[ink.r, ink.g, ink.b]
     .map((v) => v.toString(16).padStart(2, '0'))
     .join('')}`
 
-  // Drop fleck paths; keep white holes as topology. Moderate — too high kills lace/grid.
-  const turdsize = Math.max(3, Math.round(tw * th * 0.000005))
+  // Drop fleck paths; keep white holes as topology.
+  const turdsize = Math.max(4, Math.round(tw * th * 0.000005))
   const traced = await potrace(bw, {
     turdsize,
     turnpolicy: 4,
-    alphamax: 1.0,
+    // Slightly below 1 → fewer micro-corners on zoomed curves.
+    alphamax: 0.88,
     opticurve: 1,
-    opttolerance: 0.32,
+    // Higher tolerance → longer smooth arcs through pixel centers.
+    opttolerance: 0.52,
     pathonly: false,
     extractcolors: false,
   })
