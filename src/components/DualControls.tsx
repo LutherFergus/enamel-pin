@@ -67,8 +67,10 @@ export function DualControls({
         <span>Remove background</span>
       </label>
       <p className="hint">
-        Clears solid studio backdrops without touching skin tones. Hit Reprocess
-        after changing.
+        On: clears paper/studio outside the subject only — interior whites
+        (foam, apron, diamonds, eyes) stay. Off: keeps the full paper opaque
+        (including source PNG transparency, filled back to white). Hit
+        Reprocess after changing.
       </p>
       {settings.removeBackground && (
         <div className="field">
@@ -114,8 +116,8 @@ export function DualControls({
         />
       </div>
       <p className="hint">
-        Extracts dark metal walls / ink. Higher keeps thinner hatches without
-        flooding the gaps between close lines. Reprocess to apply.
+        Extracts dark metal walls / ink and silhouette edges. Higher keeps thinner
+        hatches without flooding gaps. Reprocess to apply.
       </p>
       <div className="field">
         <label>
@@ -137,8 +139,8 @@ export function DualControls({
         />
       </div>
       <p className="hint">
-        Free 0.1–6px decimal. 0.1px is the finest hairline; raise for heavier metal
-        walls. Reprocess to apply.
+        Working size is normalized so weight stays consistent across photos.
+        0.1px is the finest hairline. Reprocess to apply.
       </p>
 
       <h2>Color vector (SVG)</h2>

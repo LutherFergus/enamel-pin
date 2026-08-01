@@ -201,8 +201,8 @@ function imageGenProxy(): Plugin {
 }
 
 export default defineConfig({
-  // GitHub Pages project site: https://lutherfergus.github.io/mosaic-image-creator/
-  base: process.env.GITHUB_PAGES === '1' ? '/mosaic-image-creator/' : '/',
+  // GitHub Pages project site: https://lutherfergus.github.io/enamel-pin/
+  base: process.env.GITHUB_PAGES === '1' ? '/enamel-pin/' : '/',
   plugins: [react(), imageGenProxy()],
   optimizeDeps: {
     exclude: ['esm-potrace-wasm'],
