@@ -36,8 +36,8 @@ export type DualOutputResult = {
   vector: ColorVectorResult
   proof: ProofSvg
   /**
-   * Optional cleaned proof from the Clean up button — dominant color per
-   * outline cell. Does not replace `proof`.
+   * Optional cleaned proof from the Clean up button — Proof colors preserved,
+   * incomplete shapes completed inside the outline. Does not replace `proof`.
    */
   final?: ProofSvg
   /** True until color vector finishes (outline may already be usable). */

@@ -378,8 +378,8 @@ export default function App() {
     }
     if (viewMode === 'final') {
       return result.final
-        ? `Final SVG · one dominant color per outline cell`
-        : `Final · hit Clean up to build from the proof`
+        ? `Final SVG · Proof colors + completed shapes inside outline`
+        : `Final · hit Clean up to complete fills from the proof`
     }
     if (viewMode === 'proof') {
       const pmsCount = result.vector.palette.filter((c) => c.pmsCode).length
