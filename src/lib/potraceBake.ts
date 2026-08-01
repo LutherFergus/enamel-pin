@@ -222,13 +222,15 @@ export function bakeOutlineSvg(
 }
 
 /**
- * Bake one Potrace color layer into absolute-cubic path markups (no strokes).
+ * Bake one Potrace color layer into absolute-cubic path markups.
+ * Optional matching stroke traps hairline seams (Final plate).
  */
 export function bakeColorPaths(
   traced: string,
   superScale: number,
   fill: string,
   pmsAttr: string,
+  seamStroke = 0,
 ): { markup: string; area: number; pathCount: number } {
   const { ds, transform } = extractPotracePathDs(traced)
   if (!ds.length || !transform) return { markup: '', area: 0, pathCount: 0 }
@@ -236,12 +238,16 @@ export function bakeColorPaths(
   const t: BakeTransform = { ...transform, superScale }
   const parts: string[] = []
   let area = 0
+  const strokeAttrs =
+    seamStroke > 0
+      ? ` stroke="${fill}" stroke-width="${seamStroke.toFixed(2)}" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke fill"`
+      : ''
 
   for (const d of ds) {
     const baked = bakePotracePathD(d, t)
     if (!baked) continue
     parts.push(
-      `<path fill="${fill}" fill-rule="evenodd"${pmsAttr} d="${baked}" />`,
+      `<path fill="${fill}" fill-rule="evenodd"${strokeAttrs}${pmsAttr} d="${baked}" />`,
     )
     // Rough bbox area from absolute coords for z-order.
     const nums = baked.match(/-?\d+\.?\d*/g)?.map(Number) ?? []

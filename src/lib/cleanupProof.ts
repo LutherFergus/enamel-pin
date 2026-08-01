@@ -11,7 +11,11 @@
 
 import type { OutlineResult } from './outline'
 import { composeProofSvg, type ProofSvg } from './proofSvg'
-import { dropSpeckIslands, smoothLabelBoundaries } from './labelSmooth'
+import {
+  dropSpeckIslands,
+  overlapAdjacentFills,
+  smoothLabelBoundaries,
+} from './labelSmooth'
 import { labelsToCrispSvg } from './traceSvg'
 import type { PaletteColor, Rgb } from './types'
 import { colorDistance, rgbToHex } from './types'
@@ -45,7 +49,8 @@ export async function cleanupProofDominantCells(
   outline: OutlineResult,
   opts: CleanupProofOptions,
 ): Promise<CleanupProofResult> {
-  const maxDim = Math.max(800, Math.min(1600, opts.maxDim ?? 1400))
+  // Match vector working size so Final doesn’t undersample Proof fills.
+  const maxDim = Math.max(1000, Math.min(2000, opts.maxDim ?? 1652))
   const [{ data, w, h }, inkNative] = await Promise.all([
     rasterizeSvg(proof.svg, maxDim),
     loadInkMaskFromOutline(outline),
@@ -84,7 +89,13 @@ export async function cleanupProofDominantCells(
   )
   cellLabels = fillEnclosedTransparent(cellLabels, data, ink, w, h)
 
-  // Same absolute-cubic Potrace path as Proof/Vector.
+  // Seal color-to-color abutments, then grow enamel under metal walls so the
+  // stacked outline doesn’t leave magenta/clear hairlines (Final gaps).
+  cellLabels = overlapAdjacentFills(cellLabels, w, h, { minVotes: 1 })
+  cellLabels = trapFillsUnderInk(cellLabels, ink, w, h, 3)
+  cellLabels = fillEnclosedTransparent(cellLabels, data, ink, w, h)
+
+  // Absolute-cubic Potrace with extra trap: dilate + matching stroke.
   const smoothness = Math.max(0, Math.min(5, opts.smoothness ?? 3))
   const { svg: fillSvg, pathCount } = await labelsToCrispSvg(
     cellLabels,
@@ -94,6 +105,9 @@ export async function cleanupProofDominantCells(
       widthPx: w,
       heightPx: h,
       smoothness,
+      seamDilate: 3,
+      seamStroke: 1.6,
+      skipMajorityClean: true,
     },
   )
 
@@ -364,6 +378,88 @@ function completeShapesFromLocalColor(
   }
 
   return { labels: out, regionsCompleted }
+}
+
+/**
+ * Grow enamel labels into outline ink pixels (and clear fringe next to ink)
+ * so fills trap under the black die-line when Proof stacks outline on top.
+ */
+function trapFillsUnderInk(
+  labels: Uint16Array,
+  ink: Uint8Array,
+  w: number,
+  h: number,
+  radius: number,
+): Uint16Array {
+  const r = Math.max(1, Math.round(radius))
+  const out = new Uint16Array(labels)
+  const n = w * h
+
+  // Pass 1: clear fringe touching ink → nearest fill.
+  for (let i = 0; i < n; i++) {
+    if (ink[i] || out[i] !== 0xffff) continue
+    const x = i % w
+    const y = (i / w) | 0
+    let touchesInk = false
+    for (let dy = -1; dy <= 1 && !touchesInk; dy++) {
+      for (let dx = -1; dx <= 1 && !touchesInk; dx++) {
+        const nx = x + dx
+        const ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+        if (ink[ny * w + nx]) touchesInk = true
+      }
+    }
+    if (!touchesInk) continue
+    const fill = nearestFillLabel(out, ink, x, y, w, h, r)
+    if (fill !== 0xffff) out[i] = fill
+  }
+
+  // Pass 2: ink pixels themselves get neighbor enamel (under-metal trap).
+  for (let i = 0; i < n; i++) {
+    if (!ink[i]) continue
+    const x = i % w
+    const y = (i / w) | 0
+    const fill = nearestFillLabel(out, ink, x, y, w, h, r)
+    if (fill !== 0xffff) out[i] = fill
+  }
+
+  return out
+}
+
+function nearestFillLabel(
+  labels: Uint16Array,
+  ink: Uint8Array,
+  x0: number,
+  y0: number,
+  w: number,
+  h: number,
+  radius: number,
+): number {
+  const hist = new Map<number, number>()
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      const x = x0 + dx
+      const y = y0 + dy
+      if (x < 0 || y < 0 || x >= w || y >= h) continue
+      const i = y * w + x
+      if (ink[i]) continue
+      const lab = labels[i]
+      if (lab === 0xffff) continue
+      // Prefer closer neighbors.
+      const dist = Math.abs(dx) + Math.abs(dy)
+      const weight = Math.max(1, radius + 1 - dist)
+      hist.set(lab, (hist.get(lab) ?? 0) + weight)
+    }
+  }
+  let best = 0xffff
+  let bestN = 0
+  for (const [lab, n] of hist) {
+    if (n > bestN) {
+      bestN = n
+      best = lab
+    }
+  }
+  return best
 }
 
 /**

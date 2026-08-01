@@ -182,19 +182,33 @@ export function labelsToSmoothSvg(
   return { svg: parts.join('\n'), pathCount: pending.length }
 }
 
+export type CrispTraceOptions = {
+  widthPx: number
+  heightPx: number
+  smoothness?: number
+  /** Grow each color mask by this many px before Potrace (seals abutments). */
+  seamDilate?: number
+  /** Matching fill stroke width in art px (0 = none). Traps hairlines under outline. */
+  seamStroke?: number
+  /** Skip majority pepper clean (Final already cleaned labels). */
+  skipMajorityClean?: boolean
+}
+
 /**
  * Potrace each flat color into imaengine-style absolute cubic Beziers.
- * No seam strokes — masks are dilated 1px so fills abut without hairlines.
+ * Masks are dilated so fills abut; optional stroke traps remaining hairlines.
  */
 export async function labelsToCrispSvg(
   labels: Uint16Array,
   fillRgb: Rgb[],
   metaByIndex: Map<number, PaletteColor>,
-  opts: { widthPx: number; heightPx: number; smoothness?: number },
+  opts: CrispTraceOptions,
 ): Promise<{ svg: string; pathCount: number }> {
   await ensurePotrace()
   const { widthPx: w, heightPx: h } = opts
   const t = Math.max(0, Math.min(5, opts.smoothness ?? 3)) / 5
+  const seamDilate = Math.max(0, Math.min(6, Math.round(opts.seamDilate ?? 1)))
+  const seamStroke = Math.max(0, opts.seamStroke ?? 0)
   const n = w * h
 
   const used = new Set<number>()
@@ -226,10 +240,8 @@ export async function labelsToCrispSvg(
   const alphamax = 0.92 + t * 0.08
   const opttolerance = 0.18 + (1 - t) * 0.08
 
-  // Kill 1px boundary pepper so Potrace fits long cubics (not pixel stairs),
-  // then dilate 1px so abutting fills seal without hairline seams.
-  const cleaned = majorityLabels(labels, w, h)
-  const dilated = dilateLabels(cleaned, w, h, 1)
+  // Kill 1px boundary pepper so Potrace fits long cubics (not pixel stairs).
+  const cleaned = opts.skipMajorityClean ? labels : majorityLabels(labels, w, h)
 
   for (const idx of [...used].sort((a, b) => a - b)) {
     const c = fillRgb[idx]
@@ -238,9 +250,17 @@ export async function labelsToCrispSvg(
     const meta = metaByIndex.get(idx)
     const pmsAttr = meta?.pmsCode ? ` data-pms="${meta.pmsCode}"` : ''
 
+    // Per-color binary dilate grows into neighboring colors AND clear — true
+    // trap overlap (label-field dilate only filled transparent holes).
+    let mask = new Uint8Array(n)
+    for (let i = 0; i < n; i++) {
+      if (cleaned[i] === idx) mask[i] = 255
+    }
+    if (seamDilate > 0) mask = dilateBinary(mask, w, h, seamDilate)
+
     const bw = new ImageData(w, h)
     for (let i = 0; i < n; i++) {
-      const on = dilated[i] === idx
+      const on = mask[i] !== 0
       const o = i * 4
       const v = on ? 0 : 255
       bw.data[o] = v
@@ -259,7 +279,7 @@ export async function labelsToCrispSvg(
       extractcolors: false,
     })
 
-    const baked = bakeColorPaths(String(traced), 1, fill, pmsAttr)
+    const baked = bakeColorPaths(String(traced), 1, fill, pmsAttr, seamStroke)
     if (!baked.markup) continue
     pending.push({
       markup: baked.markup,
@@ -310,35 +330,42 @@ function majorityLabels(labels: Uint16Array, w: number, h: number): Uint16Array 
   return out
 }
 
-/** Grow each labeled region by `radius` px so neighboring fills overlap. */
-function dilateLabels(
-  labels: Uint16Array,
+/** Morphological dilate of a binary mask (grows into any off pixel). */
+function dilateBinary(
+  mask: Uint8Array,
   w: number,
   h: number,
   radius: number,
-): Uint16Array {
-  if (radius < 1) return labels
-  const out = new Uint16Array(labels)
+): Uint8Array {
   const r = Math.max(1, Math.round(radius))
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = y * w + x
-      const v = labels[i]
-      if (v === 0xffff) continue
-      for (let dy = -r; dy <= r; dy++) {
-        const ny = y + dy
-        if (ny < 0 || ny >= h) continue
-        for (let dx = -r; dx <= r; dx++) {
-          if (dx * dx + dy * dy > r * r) continue
+  let cur = mask
+  for (let pass = 0; pass < r; pass++) {
+    const next = new Uint8Array(cur)
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x
+        if (cur[i]) continue
+        let grow = false
+        for (const [dx, dy] of [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+        ] as const) {
           const nx = x + dx
-          if (nx < 0 || nx >= w) continue
-          const ni = ny * w + nx
-          if (out[ni] === 0xffff) out[ni] = v
+          const ny = y + dy
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+          if (cur[ny * w + nx]) {
+            grow = true
+            break
+          }
         }
+        if (grow) next[i] = 255
       }
     }
+    cur = next
   }
-  return out
+  return cur
 }
 
 function renderFlat(
