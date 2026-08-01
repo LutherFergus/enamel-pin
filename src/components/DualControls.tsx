@@ -116,9 +116,8 @@ export function DualControls({
         />
       </div>
       <p className="hint">
-        Extracts dark metal walls / ink and silhouette edges. Higher also picks
-        up chromatic fill boundaries (flame yellow|orange|red, etc.). Reprocess
-        to apply.
+        Extracts dark metal walls / ink and silhouette edges. Higher keeps thinner
+        hatches without flooding gaps. Reprocess to apply.
       </p>
       <div className="field">
         <label>

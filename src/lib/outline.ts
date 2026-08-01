@@ -124,18 +124,11 @@ export async function extractOutlinePng(
     // Drawn black strokes (B&W refs OR color cartoons with ink lines):
     // keep fills/holes as-traced — do not hollow or silhouette-fatten.
     if (!pureBinary) {
-      mask = removeIsolatedInk(mask, w, h, 1)
+      mask = removeIsolatedInk(mask, w, h, inkedCartoon ? 2 : 1)
     }
     if (inkedCartoon) {
-      // Chromatic fill boundaries (flames) are often 1px — majorityClean would
-      // erase them. Thicken slightly, then drop only tiny grit.
-      mask = dilate(mask, w, h, 1)
-      mask = removeSmallComponents(
-        mask,
-        w,
-        h,
-        Math.max(8, Math.round(w * h * 0.00001)),
-      )
+      mask = majorityClean(mask, w, h)
+      mask = removeSmallComponents(mask, w, h, Math.max(6, Math.round(w * h * 0.000012)))
     }
   } else {
     // Flat color / product art without drawn ink: hollow solid dark fills
@@ -524,21 +517,13 @@ function extractInkMask(
     }
   }
 
-  // Outer die edge / dark-on-light for flat color photos — not pre-inked cartoons
-  // (those already have drawn walls). Chromatic fill boundaries (flames, etc.)
-  // are added separately so enamel colors still get metal walls.
+  // Outer die edge only for flat color / product photos — never on drawn ink
+  // (fattening every hatch) or pre-inked cartoons (jagged outer blob).
   if (!lineArt && !inkedCartoon) {
     addSilhouetteRing(mask, data, lum, width, height)
     if (!photoLike) {
       addDarkOnLightContours(mask, data, lum, width, height, 50 + t * 40)
     }
-  }
-
-  // Inked cartoons often leave high-chroma regions (flames, gradients) without
-  // drawn black between colors. Sensitivity raises how readily those fill
-  // boundaries become die-lines — otherwise the slider only tweaks ink ceil.
-  if (inkedCartoon || (!lineArt && avgChroma >= 22)) {
-    addChromaticFillBoundaries(mask, data, lum, width, height, t)
   }
 
   return { mask, lineArt, avgChroma, inkedCartoon }
@@ -651,95 +636,6 @@ function addDarkOnLightContours(
           break
         }
       }
-    }
-  }
-}
-
-/**
- * Put metal walls on boundaries between distinct enamel fills.
- * Needed for flames / multi-color regions that have no drawn black ink between
- * yellow|orange|red (etc.). `t` is outline detail 0–1 — higher = subtler edges.
- */
-function addChromaticFillBoundaries(
-  mask: Uint8Array,
-  data: Uint8ClampedArray,
-  lum: Float32Array,
-  w: number,
-  h: number,
-  t: number,
-) {
-  // Lower threshold at high detail → catch softer flame bands.
-  const distMin = 88 - t * 52 // ~88 at detail 0, ~36 at detail 100
-  const chromaGate = 20 - t * 8
-  const edge = new Uint8Array(w * h)
-
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      const i = y * w + x
-      const o = i * 4
-      if (data[o + 3] < 128) continue
-      const r = data[o]
-      const g = data[o + 1]
-      const b = data[o + 2]
-      const ch = Math.max(r, g, b) - Math.min(r, g, b)
-      const L = lum[i]
-
-      for (const [dx, dy] of [
-        [1, 0],
-        [0, 1],
-        [1, 1],
-        [1, -1],
-      ] as const) {
-        const nx = x + dx
-        const ny = y + dy
-        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
-        const ni = ny * w + nx
-        const no = ni * 4
-        if (data[no + 3] < 128) continue
-
-        const nr = data[no]
-        const ng = data[no + 1]
-        const nb = data[no + 2]
-        const nch = Math.max(nr, ng, nb) - Math.min(nr, ng, nb)
-        const nL = lum[ni]
-
-        // Need at least one side chromatic (flame / enamel), not two near-grays.
-        if (ch < chromaGate && nch < chromaGate) continue
-        // Skip pure black-ink vs black-ink (already covered).
-        if (L <= 36 && ch < 28 && nL <= 36 && nch < 28) continue
-
-        const dr = r - nr
-        const dg = g - ng
-        const db = b - nb
-        const dist = Math.sqrt(dr * dr + dg * dg + db * db)
-        if (dist < distMin) continue
-
-        // Prefer marking the darker side as the wall (reads as metal).
-        if (L <= nL) edge[i] = 255
-        else edge[ni] = 255
-        // Also mark when both are bright chromatic (yellow|orange flame bands)
-        // so the wall sits on the boundary, not only the darker red.
-        if (ch >= 40 && nch >= 40 && L > 90 && nL > 90) {
-          edge[i] = 255
-          edge[ni] = 255
-        }
-      }
-    }
-  }
-
-  // Thin speck cleanup: keep runs that form short arcs, drop single dots.
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      const i = y * w + x
-      if (!edge[i]) continue
-      let n = 0
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue
-          if (edge[(y + dy) * w + (x + dx)]) n++
-        }
-      }
-      if (n >= 1) mask[i] = 255
     }
   }
 }
