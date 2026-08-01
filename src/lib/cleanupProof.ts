@@ -11,6 +11,7 @@
 
 import type { OutlineResult } from './outline'
 import { composeProofSvg, type ProofSvg } from './proofSvg'
+import { extendStripeFillsToEdge } from './extendStripes'
 import { dropSpeckIslands, smoothLabelBoundaries } from './labelSmooth'
 import { labelsToSmoothSvg } from './traceSvg'
 import type { PaletteColor, Rgb } from './types'
@@ -69,6 +70,9 @@ export async function cleanupProofDominantCells(
   const completed = completeShapesFromLocalColor(cellLabels, data, ink, w, h)
   cellLabels = completed.labels
   const cellsFixed = completed.regionsCompleted
+
+  // Reflective tape / stripe bands → grow through dark gear to silhouette edge.
+  cellLabels = extendStripeFillsToEdge(cellLabels, fillRgb, w, h)
 
   // Remaining interior clear pockets → local majority neighbor.
   cellLabels = fillEnclosedTransparent(cellLabels, data, ink, w, h)
