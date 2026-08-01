@@ -226,9 +226,10 @@ export async function labelsToCrispSvg(
   const alphamax = 0.92 + t * 0.08
   const opttolerance = 0.18 + (1 - t) * 0.08
 
-  // Dilate 1px so abutting fills seal without hairline seams (imaengine has
-  // zero stroke). 2px over-scallops noisy label boundaries under zoom.
-  const dilated = dilateLabels(labels, w, h, 1)
+  // Kill 1px boundary pepper so Potrace fits long cubics (not pixel stairs),
+  // then dilate 1px so abutting fills seal without hairline seams.
+  const cleaned = majorityLabels(labels, w, h)
+  const dilated = dilateLabels(cleaned, w, h, 1)
 
   for (const idx of [...used].sort((a, b) => a - b)) {
     const c = fillRgb[idx]
@@ -276,6 +277,37 @@ export async function labelsToCrispSvg(
 
   parts.push('</g></svg>')
   return { svg: parts.join('\n'), pathCount }
+}
+
+/** 3×3 majority vote — removes single-pixel pepper before curve fitting. */
+function majorityLabels(labels: Uint16Array, w: number, h: number): Uint16Array {
+  const out = new Uint16Array(labels)
+  const counts = new Map<number, number>()
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x
+      const center = labels[i]
+      if (center === 0xffff) continue
+      counts.clear()
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const v = labels[(y + dy) * w + (x + dx)]
+          if (v === 0xffff) continue
+          counts.set(v, (counts.get(v) ?? 0) + 1)
+        }
+      }
+      let best = center
+      let bestN = -1
+      for (const [v, n] of counts) {
+        if (n > bestN || (n === bestN && v === center)) {
+          bestN = n
+          best = v
+        }
+      }
+      out[i] = best
+    }
+  }
+  return out
 }
 
 /** Grow each labeled region by `radius` px so neighboring fills overlap. */
