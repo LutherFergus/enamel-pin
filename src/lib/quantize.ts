@@ -23,13 +23,24 @@ function isNeutral(c: Rgb): boolean {
   return chroma(c) < 28
 }
 
-/** Leftover studio white after imperfect knockout — don't spend a palette slot. */
-function isLeftoverBackdrop(c: Rgb): boolean {
-  return luminance(c) >= 248 && chroma(c) <= 12 && !isSkinTone(c)
+/** Leftover studio white after imperfect knockout — unused; exterior clear is
+ * edge-flood only so interior whites (apron/foam) stay enamel fills. */
+function isNearPaperWhite(c: Rgb): boolean {
+  return luminance(c) >= 242 && chroma(c) <= 14 && !isSkinTone(c)
 }
 
+/** Mid-to-vivid accents — enamel fills, not near-black metal. */
 function isAccent(c: Rgb): boolean {
-  return chroma(c) >= 45 || skinScore(c) > 0.12
+  const L = luminance(c)
+  if (L < 28 || L > 245) return false
+  return chroma(c) >= 32 || skinScore(c) > 0.12
+}
+
+/** Peak preference for mid-chroma / vivid enamel over gray ladders. */
+function chromaBoost(ch01: number): number {
+  // Mild at low chroma, strong through mid-vibrant (0.2–0.55), still up for brights.
+  const mid = Math.exp(-Math.pow((ch01 - 0.38) / 0.22, 2))
+  return 1.8 * ch01 + 7.5 * ch01 * ch01 + 4.2 * mid
 }
 
 type HistBin = {
@@ -56,6 +67,11 @@ export function extractPalette(
   imageData: ImageData,
   colorCount: number,
   sampleStep = 1,
+  flatArt = false,
+  /** Kept for call-site compat; exterior knockout is handled in removeBackground. */
+  _clearBackdrop = true,
+  /** When true, skip black ink — outline plate owns metal walls. */
+  enamelFillsOnly = false,
 ): Rgb[] {
   const target = Math.max(2, Math.min(colorCount, 32))
   const { data, width, height } = imageData
@@ -93,13 +109,20 @@ export function extractPalette(
       const g = data[i + 1]
       const b = data[i + 2]
       const pixel = { r, g, b }
-      if (isLeftoverBackdrop(pixel)) continue
       const ch = chroma(pixel) / 255
+      const lum = luminance(pixel)
+      // Drawn black outline ink is metal, not an enamel fill.
+      if (enamelFillsOnly && lum <= 32 && chroma(pixel) < 34) continue
+      if (!enamelFillsOnly && lum <= 28 && chroma(pixel) < 26) {
+        // Still counted via extremes path; skip accent weighting.
+      }
       const skin = skinScore(pixel)
       const dist = Math.hypot(x - cx, y - cy) / maxDist
-      // Center/subject bias + strong chroma/skin boost (refs keep reds & flesh).
+      // Center/subject bias + mid-vibrant chroma peak (prefer enamel over gray).
+      // Boost near-white fills so apron/foam/diamonds keep a palette slot.
+      const whiteBoost = isNearPaperWhite(pixel) ? 2.8 : 0
       const spatial = 0.55 + 0.45 * (1 - dist)
-      const importance = spatial * (1 + 4.2 * ch * ch + 5.5 * skin)
+      const importance = spatial * (1 + chromaBoost(ch) + 5.5 * skin + whiteBoost)
 
       const br = Math.min(BIN - 1, (r * BIN) >> 8)
       const bg = Math.min(BIN - 1, (g * BIN) >> 8)
@@ -139,7 +162,7 @@ export function extractPalette(
   const selected: Array<Rgb & { n: number; score: number; chroma: number; skin: number }> =
     []
 
-  const neutralCap = Math.max(2, Math.ceil(target * 0.5))
+  const neutralCap = Math.max(1, Math.ceil(target * 0.28))
   let neutralCount = 0
 
   const tryAdd = (bin: HistBin, minDist: number): boolean => {
@@ -161,57 +184,105 @@ export function extractPalette(
     return true
   }
 
-  // 1) Structural extremes first (black / light) — Vectorizer always keeps these.
-  ensureExtreme(bins, selected, target, true, () => {
-    neutralCount++
-  })
-  ensureExtreme(bins, selected, target, false, () => {
-    neutralCount++
-  })
+  // 1) Structural extremes first — only when they cover meaningful area.
+  const darkN = bins
+    .filter((b) => luminance(b) < 28)
+    .reduce((s, b) => s + b.n, 0)
+  const lightN = bins
+    .filter((b) => luminance(b) > 232 && chroma(b) < 22)
+    .reduce((s, b) => s + b.n, 0)
+  if (!enamelFillsOnly && darkN / totalN > 0.004) {
+    ensureExtreme(bins, selected, target, true, () => {
+      neutralCount++
+    })
+  }
+  if (lightN / totalN > 0.002) {
+    ensureExtreme(bins, selected, target, false, () => {
+      neutralCount++
+    })
+    // Prefer a true paper white seed when near-white is present.
+    if (!selected.some((s) => luminance(s) > 245 && chroma(s) < 16)) {
+      const paper = bins
+        .filter((b) => luminance(b) > 240 && chroma(b) < 18)
+        .sort((a, b) => b.n - a.n)[0]
+      if (paper && selected.length < target) {
+        selected.push({
+          r: Math.max(paper.r, 250),
+          g: Math.max(paper.g, 250),
+          b: Math.max(paper.b, 250),
+          n: paper.n,
+          score: paper.score,
+          chroma: chroma({ r: 252, g: 252, b: 252 }),
+          skin: 0,
+        })
+        neutralCount++
+      }
+    }
+  }
 
   // 1b) Force best skin/flesh bin if present (minority area, high subject value).
   ensureSkin(bins, selected, target)
 
-  // 2) Subject accents + skin BEFORE majority neutrals (~40% of slots).
-  const accentSlots = Math.max(2, Math.round(target * 0.4))
+  // 2) Subject accents + skin BEFORE majority neutrals (~55% of slots).
+  const accentSlots = Math.max(3, Math.round(target * 0.55))
+  const accentMinDist = flatArt ? 44 : 34
   const accents = [...bins].sort((a, b) => {
-    const sa = (a.chroma / 255) * 2.2 + a.skin * 3.5 + Math.log2(2 + a.n) * 0.15
-    const sb = (b.chroma / 255) * 2.2 + b.skin * 3.5 + Math.log2(2 + b.n) * 0.15
+    const La = luminance(a)
+    const Lb = luminance(b)
+    const midA = 1 - Math.abs(La - 140) / 180
+    const midB = 1 - Math.abs(Lb - 140) / 180
+    const sa =
+      (a.chroma / 255) * 3.4 +
+      midA * 0.9 +
+      a.skin * 3.5 +
+      Math.log2(2 + a.n) * 0.12
+    const sb =
+      (b.chroma / 255) * 3.4 +
+      midB * 0.9 +
+      b.skin * 3.5 +
+      Math.log2(2 + b.n) * 0.12
     return sb - sa
   })
   for (const bin of accents) {
     if (selected.length >= Math.min(target, 2 + accentSlots)) break
     if (!isAccent(bin) && bin.skin < 0.1) continue
-    tryAdd(bin, 38)
+    tryAdd(bin, accentMinDist)
   }
 
   // 3) Shade companions for accents (dark red under bright red, etc.).
-  for (const bin of bins) {
-    if (selected.length >= target) break
-    if (bin.chroma < 40) continue
-    // Prefer darker/lighter sibling of an already-selected accent hue family.
-    const related = selected.some((s) => {
-      if (s.chroma < 40) return false
-      const hueDist =
-        Math.abs(s.r - bin.r) + Math.abs(s.g - bin.g) + Math.abs(s.b - bin.b)
-      const lumGap = Math.abs(luminance(s) - luminance(bin))
-      return hueDist < 160 && lumGap > 25 && lumGap < 120
-    })
-    if (!related) continue
-    tryAdd(bin, 34)
+  // Flat clipart is already flat enamel — skip shade ladders (they become
+  // duplicate reds / muddy browns vs the original).
+  if (!flatArt) {
+    for (const bin of bins) {
+      if (selected.length >= target) break
+      if (bin.chroma < 32) continue
+      const related = selected.some((s) => {
+        if (s.chroma < 32) return false
+        const hueDist =
+          Math.abs(s.r - bin.r) + Math.abs(s.g - bin.g) + Math.abs(s.b - bin.b)
+        const lumGap = Math.abs(luminance(s) - luminance(bin))
+        return hueDist < 160 && lumGap > 25 && lumGap < 120
+      })
+      if (!related) continue
+      tryAdd(bin, 38)
+    }
   }
 
-  // 4) Remaining by subject-weighted score (population still matters, but
-  //    neutrals are capped so gray ladders can't dominate).
+  // 4) Remaining — chromatic bins first, then neutrals under cap.
   for (const bin of bins) {
     if (selected.length >= target) break
-    tryAdd(bin, 32)
+    if (isNeutral(bin) && bin.skin < 0.08) continue
+    tryAdd(bin, flatArt ? 40 : 30)
+  }
+  for (const bin of bins) {
+    if (selected.length >= target) break
+    tryAdd(bin, flatArt ? 36 : 28)
   }
 
   // Fill if accent-first left gaps (rare).
   for (const bin of bins) {
     if (selected.length >= target) break
-    tryAdd(bin, 26)
+    tryAdd(bin, flatArt ? 32 : 24)
   }
 
   // Order: importance score first so PMS snap / UI show subject colors early,
@@ -347,8 +418,11 @@ function refinePalette(imageData: ImageData, palette: Rgb[], sampleStep: number)
         const d = dist2(pixel, palette[c])
         // Slight bias: keep chromatic pixels from collapsing into neutrals.
         const neutralPenalty =
-          isNeutral(palette[c]) && chroma(pixel) > 40 ? 18 * 18 : 0
-        const dd = d + neutralPenalty
+          isNeutral(palette[c]) && chroma(pixel) > 36 ? 28 * 28 : 0
+        // Keep mid-vibrant pixels from collapsing into darker majority slots.
+        const dullPenalty =
+          chroma(palette[c]) < 30 && chroma(pixel) >= 50 ? 22 * 22 : 0
+        const dd = d + neutralPenalty + dullPenalty
         if (dd < bestD) {
           bestD = dd
           best = c
@@ -363,17 +437,44 @@ function refinePalette(imageData: ImageData, palette: Rgb[], sampleStep: number)
 
   return palette.map((c, i) => {
     if (sums[i].n === 0) return c
-    return {
+    const next = {
       r: Math.round(sums[i].r / sums[i].n),
       g: Math.round(sums[i].g / sums[i].n),
       b: Math.round(sums[i].b / sums[i].n),
     }
+    // Freeze vivid seeds — don't let area-weighted refine mute them.
+    if (chroma(c) >= 55 && chroma(next) < chroma(c) * 0.72) {
+      return c
+    }
+    return next
   })
 }
 
-export function quantizeImage(imageData: ImageData, palette: Rgb[]): Uint16Array {
+export function quantizeImage(
+  imageData: ImageData,
+  palette: Rgb[],
+  opts: { clearBackdrop?: boolean; enamelFillsOnly?: boolean } = {},
+): Uint16Array {
+  const enamelFillsOnly = opts.enamelFillsOnly === true
   const { data, width, height } = imageData
   const labels = new Uint16Array(width * height)
+  // Darkest low-chroma slot = metal wall / outline ink.
+  let blackIdx = 0
+  let blackLum = Infinity
+  let whiteIdx = -1
+  let whiteLum = -1
+  for (let c = 0; c < palette.length; c++) {
+    const L = luminance(palette[c])
+    const ch = chroma(palette[c])
+    if (ch < 40 && L < blackLum) {
+      blackLum = L
+      blackIdx = c
+    }
+    if (ch < 22 && L > whiteLum) {
+      whiteLum = L
+      whiteIdx = c
+    }
+  }
   for (let i = 0; i < width * height; i++) {
     const o = i * 4
     if (data[o + 3] < 128) {
@@ -381,8 +482,31 @@ export function quantizeImage(imageData: ImageData, palette: Rgb[]): Uint16Array
       continue
     }
     const pixel = { r: data[o], g: data[o + 1], b: data[o + 2] }
-    if (isLeftoverBackdrop(pixel)) {
+    // Never treat opaque near-white as empty — interior whites are enamel.
+    // Exterior paper is already alpha=0 from removeBackground when enabled.
+    // Pre-inked cartoons: black linework belongs on the outline plate.
+    if (enamelFillsOnly && luminance(pixel) <= 34 && chroma(pixel) < 36) {
       labels[i] = 0xffff
+      continue
+    }
+    // Snap paper/foam/apron whites to the white slot.
+    if (
+      whiteIdx >= 0 &&
+      whiteLum > 230 &&
+      luminance(pixel) >= 235 &&
+      chroma(pixel) <= 20
+    ) {
+      labels[i] = whiteIdx
+      continue
+    }
+    // Snap drawn outline ink straight to metal black — stops navy/brown fringes.
+    if (
+      !enamelFillsOnly &&
+      luminance(pixel) <= 32 &&
+      chroma(pixel) < 34 &&
+      blackLum < 45
+    ) {
+      labels[i] = blackIdx
       continue
     }
     let best = 0
@@ -392,6 +516,15 @@ export function quantizeImage(imageData: ImageData, palette: Rgb[]): Uint16Array
       // Keep reds/skin from snapping into nearby grays.
       if (isNeutral(palette[c]) && (chroma(pixel) > 40 || isSkinTone(pixel))) d += 28
       if (isSkinTone(pixel) && !isSkinTone(palette[c]) && chroma(palette[c]) < 35) d += 35
+      // Prefer true white for near-white fills (apron, foam, diamonds).
+      if (
+        luminance(pixel) > 235 &&
+        chroma(pixel) < 20 &&
+        luminance(palette[c]) > 235 &&
+        chroma(palette[c]) < 25
+      ) {
+        d -= 18
+      }
       if (d < bestDist) {
         bestDist = d
         best = c

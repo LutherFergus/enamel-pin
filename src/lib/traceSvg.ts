@@ -53,7 +53,7 @@ export function labelsToSmoothSvg(
 ): { svg: string; pathCount: number } {
   const { widthPx: w, heightPx: h, smoothness } = opts
   const t = Math.max(0, Math.min(5, smoothness)) / 5
-  const pathomitScale = Math.max(0.25, Math.min(1.5, opts.pathomitScale ?? 1))
+  const pathomitScale = Math.max(0.25, Math.min(1.75, opts.pathomitScale ?? 1))
 
   // 2×–3× supersample: pixel stairs become sub-pixel to the fitter.
   const superScale = smoothness >= 4 ? 3 : smoothness >= 2 ? 2 : 1

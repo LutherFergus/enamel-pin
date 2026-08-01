@@ -1,16 +1,18 @@
 /**
- * Clean up a proof SVG: inside each outline cell, if more than one fill color
- * is present, flood the whole cell with the dominant color.
+ * Final / Clean up: keep the Proof’s color layout, then complete incomplete
+ * shapes inside the outline.
  *
- * Exterior is ONLY transparent background (alpha), never enamel fills. That way
- * gaps in the outer silhouette don't let "outside" flood through the face and
- * wipe skin/dress colors during Clean up.
+ * Do NOT flatten each outline cell to one dominant color — that erased flames,
+ * stripes, and other intentional multi-fill regions.
+ *
+ * Outline gaps: don’t flood through breaks. Look at how much of each color is
+ * already in that local area and complete the shape with that color.
  */
 
 import type { OutlineResult } from './outline'
 import { composeProofSvg, type ProofSvg } from './proofSvg'
 import { dropSpeckIslands, smoothLabelBoundaries } from './labelSmooth'
-import { labelsToCrispSvg } from './traceSvg'
+import { labelsToSmoothSvg } from './traceSvg'
 import type { PaletteColor, Rgb } from './types'
 import { colorDistance, rgbToHex } from './types'
 
@@ -31,16 +33,12 @@ export type CleanupProofResult = {
   cellCount: number
 }
 
-const MIN_COLOR_SHARE = 0.04 // ignore speck colors under 4% of a cell
 /** Pixels at or below this alpha count as clear background. */
 const CLEAR_ALPHA = 96
 
 /**
- * Rasterize the proof, unify multi-color outline cells to their dominant fill,
- * re-trace fills, and stack the existing outline back on top.
- *
- * Ink walls come from the outline PNG (true die-lines). Dark enamel fills like
- * navy hair are NOT treated as metal.
+ * Rasterize the proof, preserve multi-color fills, complete incomplete shapes
+ * from local color evidence, re-trace like the vector plate, stack outline.
  */
 export async function cleanupProofDominantCells(
   proof: ProofSvg,
@@ -58,37 +56,48 @@ export async function cleanupProofDominantCells(
       ? inkNative.mask
       : scaleMaskNearest(inkNative.mask, inkNative.w, inkNative.h, w, h)
 
-  // Light morphological close — seals tiny silhouette nicks without filling
-  // intentional polka holes (those stay open if gap > ~2px).
-  ink = closeMask(ink, w, h, 1.25)
+  // Tiny nick seal only — do not close intentional openings.
+  ink = closeMask(ink, w, h, 1.0)
 
   const palette = (opts.palette ?? []).filter((c) => c.enabled !== false)
-  let { cellLabels, fillRgb, metaByIndex, cellsFixed, cellCount } =
-    floodDominantInCells(data, ink, w, h, palette)
+  const { labels: snapped, fillRgb, metaByIndex, labeledPixels } =
+    snapProofToLabels(data, ink, w, h, palette)
 
-  // Clear pockets inside the figure (outline gaps, missing fills) → surrounding color.
+  let cellLabels = snapped
+
+  // Complete incomplete shapes from local color amount (handles outline gaps).
+  const completed = completeShapesFromLocalColor(cellLabels, data, ink, w, h)
+  cellLabels = completed.labels
+  const cellsFixed = completed.regionsCompleted
+
+  // Remaining interior clear pockets → local majority neighbor.
   cellLabels = fillEnclosedTransparent(cellLabels, data, ink, w, h)
 
-  // Round pixel stairs before curve fitting.
-  cellLabels = smoothLabelBoundaries(cellLabels, w, h, 4)
+  // Light cleanup only — preserve flame / stripe multi-color.
+  cellLabels = smoothLabelBoundaries(cellLabels, w, h, 1)
   cellLabels = dropSpeckIslands(
     cellLabels,
     w,
     h,
-    Math.max(10, Math.round(w * h * 0.00002)),
+    Math.max(6, Math.round(w * h * 0.000012)),
+    fillRgb,
   )
-  // Speck drop can reopen holes — fill again.
   cellLabels = fillEnclosedTransparent(cellLabels, data, ink, w, h)
-  cellLabels = smoothLabelBoundaries(cellLabels, w, h, 2)
 
-  // Potrace cubics — crisp enamel curves (not ImageTracer stair-waves).
-  const { svg: fillSvg, pathCount } = await labelsToCrispSvg(
+  // Same ImageTracer path as Proof/Vector so Final reads like Proof + fills.
+  const smoothness = Math.max(0, Math.min(5, opts.smoothness ?? 1))
+  const pathomitScale = Math.max(0.35, Math.min(1.2, opts.pathomitScale ?? 0.7))
+  const { svg: fillSvg, pathCount } = labelsToSmoothSvg(
     cellLabels,
     fillRgb,
     metaByIndex,
-    { widthPx: w, heightPx: h },
+    {
+      widthPx: w,
+      heightPx: h,
+      smoothness,
+      pathomitScale,
+    },
   )
-  cellCount = Math.max(cellCount, pathCount)
 
   const nextProof = composeProofSvg(fillSvg, outline.svg)
   const vectorBlob = new Blob([fillSvg], { type: 'image/svg+xml;charset=utf-8' })
@@ -98,7 +107,7 @@ export async function cleanupProofDominantCells(
     vectorSvg: fillSvg,
     vectorBlob,
     cellsFixed,
-    cellCount,
+    cellCount: Math.max(pathCount, labeledPixels > 0 ? 1 : 0),
   }
 }
 
@@ -118,24 +127,24 @@ async function loadInkMaskFromOutline(
   const mask = new Uint8Array(w * h)
   for (let i = 0; i < w * h; i++) {
     // Outline PNG is transparent non-ink; opaque = metal wall.
-    mask[i] = data[i * 4 + 3] >= 128 ? 255 : 0
+    if (data[i * 4 + 3] > 40) mask[i] = 255
   }
   return { mask, w, h }
 }
 
 function scaleMaskNearest(
-  mask: Uint8Array,
-  srcW: number,
-  srcH: number,
-  dstW: number,
-  dstH: number,
+  src: Uint8Array,
+  sw: number,
+  sh: number,
+  tw: number,
+  th: number,
 ): Uint8Array {
-  const out = new Uint8Array(dstW * dstH)
-  for (let y = 0; y < dstH; y++) {
-    const sy = Math.min(srcH - 1, Math.floor(((y + 0.5) * srcH) / dstH))
-    for (let x = 0; x < dstW; x++) {
-      const sx = Math.min(srcW - 1, Math.floor(((x + 0.5) * srcW) / dstW))
-      out[y * dstW + x] = mask[sy * srcW + sx]
+  const out = new Uint8Array(tw * th)
+  for (let y = 0; y < th; y++) {
+    const sy = Math.min(sh - 1, Math.round((y * (sh - 1)) / Math.max(1, th - 1)))
+    for (let x = 0; x < tw; x++) {
+      const sx = Math.min(sw - 1, Math.round((x * (sw - 1)) / Math.max(1, tw - 1)))
+      out[y * tw + x] = src[sy * sw + sx]
     }
   }
   return out
@@ -158,8 +167,6 @@ async function rasterizeSvg(
     canvas.width = w
     canvas.height = h
     const ctx = canvas.getContext('2d', { willReadFrequently: true })!
-    // Keep transparency — exterior flood must walk clear pixels only, not a
-    // white paper fill that would look like skin/background merged.
     ctx.clearRect(0, 0, w, h)
     ctx.drawImage(img, 0, 0, w, h)
     const imageData = ctx.getImageData(0, 0, w, h)
@@ -199,34 +206,49 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   })
 }
 
-function floodDominantInCells(
+/**
+ * Snap each opaque proof pixel to the nearest palette color.
+ * Preserves multi-color regions (flames, stripes) — no cell flattening.
+ */
+function snapProofToLabels(
   data: Uint8ClampedArray,
   ink: Uint8Array,
   w: number,
   h: number,
   palette: PaletteColor[],
 ): {
-  cellLabels: Uint16Array
+  labels: Uint16Array
   fillRgb: Rgb[]
   metaByIndex: Map<number, PaletteColor>
-  cellsFixed: number
-  cellCount: number
+  labeledPixels: number
 } {
   const n = w * h
-  // Exterior = clear background only. Opaque fills (skin, red dress) block the
-  // flood even when the silhouette outline has gaps.
-  const exterior = markExteriorThroughClear(data, ink, w, h)
+  const labels = new Uint16Array(n)
+  for (let i = 0; i < n; i++) labels[i] = 0xffff
 
   const metaByIndex = new Map<number, PaletteColor>()
-  for (const c of palette) metaByIndex.set(c.index, c)
+  const usePalette = palette.length > 0
 
-  const usePaletteIndices = palette.length > 0
   let nextDiscover = 0
   const discoverKey = new Map<string, number>()
-  const colors: Rgb[] = palette.map((c) => ({ r: c.r, g: c.g, b: c.b }))
+  const colors: Rgb[] = usePalette
+    ? []
+    : []
+
+  const maxIdx = usePalette ? Math.max(...palette.map((c) => c.index), 0) : 0
+  const fillRgb: Rgb[] = usePalette
+    ? Array.from({ length: maxIdx + 1 }, () => ({ r: 0, g: 0, b: 0 }))
+    : colors
+
+  if (usePalette) {
+    for (const c of palette) {
+      fillRgb[c.index] = { r: c.r, g: c.g, b: c.b }
+      metaByIndex.set(c.index, c)
+    }
+  }
 
   const snap = (r: number, g: number, b: number): number => {
-    if (usePaletteIndices) {
+    if (usePalette) {
       let best = palette[0].index
       let bestD = Infinity
       for (const c of palette) {
@@ -238,112 +260,112 @@ function floodDominantInCells(
       }
       return best
     }
-    const qr = (r / 12) | 0
-    const qg = (g / 12) | 0
-    const qb = (b / 12) | 0
+    const qr = (r / 10) | 0
+    const qg = (g / 10) | 0
+    const qb = (b / 10) | 0
     const key = `${qr},${qg},${qb}`
     let idx = discoverKey.get(key)
     if (idx == null) {
       idx = nextDiscover++
       discoverKey.set(key, idx)
-      colors[idx] = {
-        r: Math.min(255, qr * 12 + 6),
-        g: Math.min(255, qg * 12 + 6),
-        b: Math.min(255, qb * 12 + 6),
+      const rgb = {
+        r: Math.min(255, qr * 10 + 5),
+        g: Math.min(255, qg * 10 + 5),
+        b: Math.min(255, qb * 10 + 5),
       }
-      metaByIndex.set(idx, {
-        ...colors[idx],
-        hex: rgbToHex(colors[idx]),
-        index: idx,
-      })
+      colors[idx] = rgb
+      fillRgb[idx] = rgb
+      metaByIndex.set(idx, { ...rgb, hex: rgbToHex(rgb), index: idx })
     }
     return idx
   }
 
-  const maxFillIndex = usePaletteIndices
-    ? Math.max(...palette.map((c) => c.index), 0)
-    : 0
-  const fillRgb: Rgb[] = usePaletteIndices
-    ? Array.from({ length: maxFillIndex + 1 }, () => ({ r: 0, g: 0, b: 0 }))
-    : colors
-  if (usePaletteIndices) {
-    for (const c of palette) {
-      fillRgb[c.index] = { r: c.r, g: c.g, b: c.b }
-    }
-  }
-
-  const cellLabels = new Uint16Array(n)
-  for (let i = 0; i < n; i++) cellLabels[i] = 0xffff
-
-  const seen = new Uint8Array(n)
-  const stack: number[] = []
-  let cellsFixed = 0
-  let cellCount = 0
-
-  for (let seed = 0; seed < n; seed++) {
-    if (ink[seed] || exterior[seed] || seen[seed]) continue
-
-    const cell: number[] = []
-    const hist = new Map<number, number>()
-    stack.length = 0
-    stack.push(seed)
-    seen[seed] = 1
-
-    while (stack.length) {
-      const i = stack.pop()!
-      cell.push(i)
-      const o = i * 4
-      // Sample opaque enamel inside the cell (including dark navy).
-      if (data[o + 3] > CLEAR_ALPHA && !ink[i]) {
-        const lab = snap(data[o], data[o + 1], data[o + 2])
-        hist.set(lab, (hist.get(lab) ?? 0) + 1)
-      }
-      const x = i % w
-      const yy = (i / w) | 0
-      const neighbors = [
-        x > 0 ? i - 1 : -1,
-        x + 1 < w ? i + 1 : -1,
-        yy > 0 ? i - w : -1,
-        yy + 1 < h ? i + w : -1,
-      ]
-      for (const ni of neighbors) {
-        if (ni < 0) continue
-        if (ink[ni] || exterior[ni] || seen[ni]) continue
-        seen[ni] = 1
-        stack.push(ni)
-      }
-    }
-
-    const total = [...hist.values()].reduce((a, b) => a + b, 0)
-    if (total === 0) continue
-
-    const significant: Array<[number, number]> = []
-    for (const [lab, count] of hist) {
-      if (count / total >= MIN_COLOR_SHARE) significant.push([lab, count])
-    }
-    if (significant.length === 0) continue
-
-    significant.sort((a, b) => b[1] - a[1])
-    const dominant = significant[0][0]
-    // Only rewrite when the cell actually mixes colors.
-    if (significant.length > 1) {
-      cellsFixed++
-      for (const i of cell) cellLabels[i] = dominant
-    } else {
-      // Keep the single color; still label so the cell is traced.
-      for (const i of cell) cellLabels[i] = dominant
-    }
-
-    cellCount++
+  let labeledPixels = 0
+  for (let i = 0; i < n; i++) {
+    if (ink[i]) continue
+    const o = i * 4
+    if (data[o + 3] <= CLEAR_ALPHA) continue
+    labels[i] = snap(data[o], data[o + 1], data[o + 2])
+    labeledPixels++
   }
 
   return {
-    cellLabels,
-    fillRgb: usePaletteIndices ? fillRgb : colors,
+    labels,
+    fillRgb: usePalette ? fillRgb : colors,
     metaByIndex,
-    cellsFixed,
-    cellCount,
+    labeledPixels,
   }
+}
+
+/**
+ * Grow existing fills into nearby clear interior pixels when local color
+ * evidence says that shape should continue — even if the outline has a gap.
+ *
+ * For each unlabeled interior pixel, vote labeled neighbors in a small radius.
+ * If one color owns enough of the local color mass, assign it (complete shape).
+ */
+function completeShapesFromLocalColor(
+  labels: Uint16Array,
+  data: Uint8ClampedArray,
+  ink: Uint8Array,
+  w: number,
+  h: number,
+): { labels: Uint16Array; regionsCompleted: number } {
+  const n = w * h
+  let out = new Uint16Array(labels)
+  const exterior = markExteriorInteriorAware(data, ink, out, w, h)
+
+  let regionsCompleted = 0
+  const radius = 3
+  // Require a clear majority of local color so multi-color zones (flames) stay.
+  const majority = 0.58
+  const minVotes = 4
+
+  for (let pass = 0; pass < 4; pass++) {
+    const next = new Uint16Array(out)
+    let changed = 0
+    for (let i = 0; i < n; i++) {
+      if (out[i] !== 0xffff || ink[i] || exterior[i]) continue
+      // Only complete into clear / unlabeled proof pixels.
+      if (data[i * 4 + 3] > CLEAR_ALPHA && out[i] !== 0xffff) continue
+
+      const x0 = i % w
+      const y0 = (i / w) | 0
+      const hist = new Map<number, number>()
+      let total = 0
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (dx === 0 && dy === 0) continue
+          const x = x0 + dx
+          const y = y0 + dy
+          if (x < 0 || y < 0 || x >= w || y >= h) continue
+          const ni = y * w + x
+          if (ink[ni] || exterior[ni]) continue
+          const lab = out[ni]
+          if (lab === 0xffff) continue
+          hist.set(lab, (hist.get(lab) ?? 0) + 1)
+          total++
+        }
+      }
+      if (total < minVotes) continue
+      let best = 0xffff
+      let bestN = 0
+      for (const [lab, c] of hist) {
+        if (c > bestN) {
+          bestN = c
+          best = lab
+        }
+      }
+      if (best === 0xffff || bestN / total < majority) continue
+      next[i] = best
+      changed++
+    }
+    out = next
+    if (changed === 0) break
+    regionsCompleted += changed
+  }
+
+  return { labels: out, regionsCompleted }
 }
 
 /**
@@ -360,46 +382,11 @@ function fillEnclosedTransparent(
 ): Uint16Array {
   const n = w * h
   const out = new Uint16Array(labels)
-
-  // Subject = metal walls + already-labeled enamel + opaque proof pixels.
-  const subject = new Uint8Array(n)
-  for (let i = 0; i < n; i++) {
-    if (ink[i] || out[i] !== 0xffff || data[i * 4 + 3] > CLEAR_ALPHA) {
-      subject[i] = 255
-    }
-  }
-  // Close modest silhouette gaps (~8px) so interior clear isn't "outside".
-  const sealed = closeMask(subject, w, h, 4)
-
-  const exterior = new Uint8Array(n)
-  const stack: number[] = []
-  const pushExt = (i: number) => {
-    if (i < 0 || i >= n) return
-    if (sealed[i] || exterior[i]) return
-    exterior[i] = 1
-    stack.push(i)
-  }
-  for (let x = 0; x < w; x++) {
-    pushExt(x)
-    pushExt((h - 1) * w + x)
-  }
-  for (let y = 0; y < h; y++) {
-    pushExt(y * w)
-    pushExt(y * w + (w - 1))
-  }
-  while (stack.length) {
-    const i = stack.pop()!
-    const x = i % w
-    const y = (i / w) | 0
-    if (x > 0) pushExt(i - 1)
-    if (x + 1 < w) pushExt(i + 1)
-    if (y > 0) pushExt(i - w)
-    if (y + 1 < h) pushExt(i + w)
-  }
+  const exterior = markExteriorInteriorAware(data, ink, out, w, h)
 
   const seen = new Uint8Array(n)
+  const stack: number[] = []
   for (let seed = 0; seed < n; seed++) {
-    // Unlabeled, not metal, inside the sealed subject hull.
     if (out[seed] !== 0xffff || ink[seed] || exterior[seed] || seen[seed]) {
       continue
     }
@@ -485,29 +472,33 @@ function dominantNeighborLabel(
 }
 
 /**
- * Mark background connected to the frame through CLEAR pixels only.
- * Opaque fills stop the flood — silhouette gaps no longer erase the face.
+ * Exterior = clear pixels reachable from the frame, with subject morph-closed
+ * so small outline gaps don’t classify interior clear as outside.
  */
-function markExteriorThroughClear(
+function markExteriorInteriorAware(
   data: Uint8ClampedArray,
   ink: Uint8Array,
+  labels: Uint16Array,
   w: number,
   h: number,
 ): Uint8Array {
   const n = w * h
+  const subject = new Uint8Array(n)
+  for (let i = 0; i < n; i++) {
+    if (ink[i] || labels[i] !== 0xffff || data[i * 4 + 3] > CLEAR_ALPHA) {
+      subject[i] = 255
+    }
+  }
+  const sealed = closeMask(subject, w, h, 5)
+
   const exterior = new Uint8Array(n)
   const stack: number[] = []
-
-  const isClear = (i: number) => data[i * 4 + 3] <= CLEAR_ALPHA
-
   const push = (i: number) => {
     if (i < 0 || i >= n) return
-    if (ink[i] || exterior[i]) return
-    if (!isClear(i)) return
+    if (sealed[i] || exterior[i]) return
     exterior[i] = 1
     stack.push(i)
   }
-
   for (let x = 0; x < w; x++) {
     push(x)
     push((h - 1) * w + x)
@@ -516,7 +507,6 @@ function markExteriorThroughClear(
     push(y * w)
     push(y * w + (w - 1))
   }
-
   while (stack.length) {
     const i = stack.pop()!
     const x = i % w
@@ -526,7 +516,6 @@ function markExteriorThroughClear(
     if (y > 0) push(i - w)
     if (y + 1 < h) push(i + w)
   }
-
   return exterior
 }
 
@@ -597,4 +586,3 @@ function erodeMask(
   }
   return out
 }
-

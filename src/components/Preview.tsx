@@ -329,8 +329,8 @@ export function Preview({ viewMode, sourceUrl, result, busy }: Props) {
       <div className="empty-state">
         <h3>Final</h3>
         <p>
-          Run <strong>Clean up</strong> to fill each black-outline cell with its
-          dominant color. The result appears here.
+          Run <strong>Clean up</strong> to complete incomplete fills inside the
+          outline (keeps Proof colors — doesn’t flatten cells). The result appears here.
         </p>
       </div>
     )
