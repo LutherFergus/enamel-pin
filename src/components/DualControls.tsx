@@ -222,6 +222,50 @@ export function DualControls({
       </p>
       <div className="field">
         <label>
+          <span>Min fill / gap</span>
+          <span className="value">{settings.vector.minFillMm.toFixed(2)} mm</span>
+        </label>
+        <input
+          type="range"
+          min={0.3}
+          max={1.2}
+          step={0.05}
+          value={settings.vector.minFillMm}
+          disabled={disabled}
+          onChange={(e) =>
+            patchVector({
+              minFillMm: Math.round(Number(e.target.value) * 100) / 100,
+            })
+          }
+        />
+      </div>
+      <p className="hint">
+        Soft-enamel floor: color pockets and gaps ≥ this size stay in the vector.
+        Default 0.3mm. Reprocess to apply.
+      </p>
+      <div className="field">
+        <label>
+          <span>Pin width (scale)</span>
+          <span className="value">{roundInt(settings.vector.pinWidthMm)} mm</span>
+        </label>
+        <input
+          type="range"
+          min={15}
+          max={80}
+          step="any"
+          value={settings.vector.pinWidthMm}
+          disabled={disabled}
+          onChange={(e) =>
+            patchVector({ pinWidthMm: roundInt(Number(e.target.value)) })
+          }
+        />
+      </div>
+      <p className="hint">
+        Finished pin long edge — converts mm ↔ working pixels for the min-fill
+        rule. Reprocess to apply.
+      </p>
+      <div className="field">
+        <label>
           <span>Detail retention</span>
           <span className="value">{roundInt(settings.vector.detailRetention)}</span>
         </label>
@@ -240,8 +284,8 @@ export function DualControls({
         />
       </div>
       <p className="hint">
-        Higher keeps small shapes (dots, fins, linework). Lower merges speckles
-        into larger flats. Reprocess to apply.
+        Higher keeps small shapes (dots, fins, linework). Still never drops
+        fills ≥ min fill / gap. Reprocess to apply.
       </p>
     </div>
   )

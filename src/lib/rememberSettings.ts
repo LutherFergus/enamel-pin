@@ -13,7 +13,7 @@ function retentionFromMinRegionRatio(minRegionRatio: number): number {
   return Math.round(Math.max(0, Math.min(100, t * 100)))
 }
 
-const STORAGE_KEY = 'enamel-pin-creator.settings.v4'
+const STORAGE_KEY = 'enamel-pin-creator.settings.v5'
 
 export type RememberedSettings = {
   savedAt: string
@@ -88,6 +88,13 @@ export function sanitizeSettings(raw: unknown): DualOutputSettings {
         Math.min(30, Math.round(o.vector.pmsTolerance)),
       )
     }
+    if (isFiniteNumber(o.vector.minFillMm)) {
+      base.vector.minFillMm =
+        Math.round(Math.max(0.3, Math.min(1.2, o.vector.minFillMm)) * 100) / 100
+    }
+    if (isFiniteNumber(o.vector.pinWidthMm)) {
+      base.vector.pinWidthMm = Math.max(15, Math.min(80, Math.round(o.vector.pinWidthMm)))
+    }
   }
 
   return base
@@ -97,6 +104,7 @@ export function loadRememberedSettings(): RememberedSettings | null {
   try {
     const raw =
       localStorage.getItem(STORAGE_KEY) ??
+      localStorage.getItem('enamel-pin-creator.settings.v4') ??
       localStorage.getItem('enamel-pin-creator.settings.v1')
     if (!raw) return null
     const parsed = JSON.parse(raw) as { savedAt?: string; settings?: unknown }
