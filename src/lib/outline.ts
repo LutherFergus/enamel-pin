@@ -92,6 +92,10 @@ export async function extractOutlinePng(
   if (background.enabled !== false) {
     removeBackground(imageData, background)
     fillTransparentWithWhite(imageData)
+  } else {
+    // Remove-background OFF: preserve paper. Composite any existing alpha
+    // holes onto white so the outline sees opaque source, not checkerboard.
+    fillTransparentWithWhite(imageData)
   }
 
   const { mask: rawMask, lineArt, avgChroma, inkedCartoon } = extractInkMask(

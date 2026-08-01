@@ -67,8 +67,9 @@ export function DualControls({
         <span>Remove background</span>
       </label>
       <p className="hint">
-        Clears paper/studio outside the subject silhouette only — whites inside
-        the art (foam, apron, diamonds) stay. When off, nothing is cleared. Hit
+        On: clears paper/studio outside the subject only — interior whites
+        (foam, apron, diamonds, eyes) stay. Off: keeps the full paper opaque
+        (including source PNG transparency, filled back to white). Hit
         Reprocess after changing.
       </p>
       {settings.removeBackground && (

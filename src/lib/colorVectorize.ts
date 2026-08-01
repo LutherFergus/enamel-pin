@@ -1,4 +1,8 @@
-import { removeBackground, type RemoveBgOptions } from './background'
+import {
+  fillTransparentWithWhite,
+  removeBackground,
+  type RemoveBgOptions,
+} from './background'
 import { isFlatDigitalArt, scrubAntiAliasFringe } from './flatArt'
 import { dropSpeckIslands, overlapAdjacentFills, smoothLabelBoundaries } from './labelSmooth'
 import {
@@ -32,29 +36,6 @@ function sameHueLab(
   if (d > Math.PI) d = 2 * Math.PI - d
   // ~25° — same enamel family (red vs red-orange), not red vs blue.
   return d <= 0.44
-}
-
-/** Color art with a meaningful share of drawn black outline ink. */
-function hasDrawnBlackInk(imageData: ImageData, sampleStep = 2): boolean {
-  const { data, width, height } = imageData
-  let opaque = 0
-  let ink = 0
-  let darkish = 0
-  for (let y = 0; y < height; y += sampleStep) {
-    for (let x = 0; x < width; x += sampleStep) {
-      const i = (y * width + x) * 4
-      if (data[i + 3] < 128) continue
-      opaque++
-      const L = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]
-      const ch =
-        Math.max(data[i], data[i + 1], data[i + 2]) -
-        Math.min(data[i], data[i + 1], data[i + 2])
-      if (L < 70) darkish++
-      if (L <= 42 && ch < 28) ink++
-    }
-  }
-  if (opaque < 200) return false
-  return ink / opaque >= 0.03 && ink / Math.max(1, darkish) >= 0.4
 }
 
 export type ColorVectorSettings = {
@@ -560,27 +541,33 @@ export async function vectorizeColors(
 ): Promise<ColorVectorResult> {
   const imageData = scaleToCanvas(source, settings.maxDim)
   const clearBackdrop = background.enabled !== false
-  // Product-photo backdrops must not become the "primary" palette color.
-  removeBackground(imageData, background)
+  if (clearBackdrop) {
+    // Product-photo / paper outside the subject → transparent.
+    removeBackground(imageData, background)
+  } else {
+    // Remove-background OFF: keep full paper. Source PNGs often already have
+    // alpha keyed out — composite those holes back onto opaque white.
+    fillTransparentWithWhite(imageData)
+  }
   // Kill muddy AA fringe between black outlines and flat fills before palette.
   scrubAntiAliasFringe(imageData)
   scrubAntiAliasFringe(imageData)
 
   const flat = isFlatDigitalArt(imageData)
-  // Pre-inked clipart: black strokes are the outline plate — keep color SVG
-  // as enamel fills only so proof isn't a fat black blob.
-  const enamelFillsOnly = flat || hasDrawnBlackInk(imageData)
+  // Keep black ink in the color SVG (eyes, lettering, pupils). Outline plate
+  // still supplies the die-line; punching blacks to transparent made faceless
+  // vectors and white sliver gaps between fills.
   const { width, height } = imageData
   const detail = detailRetentionParams(settings.detailRetention)
-  // Flat clipart needs harder cleanup than soft-shaded art — speckles in white
-  // foam/apron are the main "horrible vs original" failure mode.
+  // Flat clipart: hard denoise / boundary clean, but don't eat micro features
+  // (eye whites, foam flecks) with an oversized speck threshold.
   const denoisePasses = flat ? Math.max(detail.denoisePasses, 3) : detail.denoisePasses
   const boundaryPasses = flat ? Math.max(detail.boundaryPasses, 3) : detail.boundaryPasses
   const speckMin = flat
-    ? Math.max(28, Math.round(width * height * 0.00008))
+    ? Math.max(14, Math.round(width * height * 0.00004))
     : Math.max(12, Math.round(width * height * detail.minRegionRatio * detail.speckScale))
   const minArea = flat
-    ? Math.max(24, Math.round(width * height * Math.max(detail.minRegionRatio, 0.0002)))
+    ? Math.max(20, Math.round(width * height * Math.max(detail.minRegionRatio, 0.00018)))
     : Math.max(8, Math.round(width * height * detail.minRegionRatio))
 
   const palette = extractPalette(
@@ -589,11 +576,11 @@ export async function vectorizeColors(
     1,
     flat,
     clearBackdrop,
-    enamelFillsOnly,
+    false,
   )
   let labels = quantizeImage(imageData, palette, {
     clearBackdrop,
-    enamelFillsOnly,
+    enamelFillsOnly: false,
   })
   labels = denoiseLabels(labels, width, height, denoisePasses)
   labels = mergeSmallRegions(labels, width, height, minArea)
@@ -608,17 +595,20 @@ export async function vectorizeColors(
       labels,
       width,
       height,
-      Math.max(18, Math.round(speckMin * 0.7)),
+      Math.max(10, Math.round(speckMin * 0.65)),
     )
   }
   // Overlap abutting fills so vector paths seal (no checkerboard hairlines).
   labels = overlapAdjacentFills(labels, width, height)
+  if (flat) {
+    labels = overlapAdjacentFills(labels, width, height, { minVotes: 1 })
+  }
 
   const areas = countLabelUsage(labels, palette.length)
   const autoMerges = autoMergeCloseColors(
     palette,
     areas,
-    flat ? Math.max(settings.pmsTolerance, 14) : settings.pmsTolerance,
+    flat ? Math.max(settings.pmsTolerance, 16) : settings.pmsTolerance,
     settings.snapToPms,
   )
   const allMerges = combineMerges(palette.length, autoMerges, merges)
@@ -631,7 +621,7 @@ export async function vectorizeColors(
     mergedPalette,
     width,
     height,
-    flat ? Math.max(settings.smoothness, 4) : settings.smoothness,
+    flat ? Math.max(settings.smoothness, 5) : settings.smoothness,
     settings.snapToPms,
     overrides,
     {
@@ -641,8 +631,8 @@ export async function vectorizeColors(
       palette,
       mergeMap,
     },
-    flat ? Math.max(detail.pathomitScale, 1.1) : detail.pathomitScale,
-    flat ? Math.max(settings.pmsTolerance, 14) : settings.pmsTolerance,
+    flat ? Math.max(detail.pathomitScale, 1.35) : detail.pathomitScale,
+    flat ? Math.max(settings.pmsTolerance, 16) : settings.pmsTolerance,
     disabledColors,
   )
 }

@@ -133,7 +133,9 @@ export function overlapAdjacentFills(
   labels: Uint16Array,
   width: number,
   height: number,
+  opts: { minVotes?: number } = {},
 ): Uint16Array {
+  const minVotes = Math.max(1, opts.minVotes ?? 2)
   const out = new Uint16Array(labels)
   const claims = new Map<number, Map<number, number>>() // pixel → color → votes
 
@@ -179,8 +181,7 @@ export function overlapAdjacentFills(
         best = color
       }
     }
-    // Only rewrite when a neighbor color claims with ≥2 sides (shared edge).
-    if (best !== current && bestCount >= 2) out[i] = best
+    if (best !== current && bestCount >= minVotes) out[i] = best
   }
 
   return out
