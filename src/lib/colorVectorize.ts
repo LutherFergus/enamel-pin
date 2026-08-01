@@ -34,6 +34,29 @@ function sameHueLab(
   return d <= 0.44
 }
 
+/** Color art with a meaningful share of drawn black outline ink. */
+function hasDrawnBlackInk(imageData: ImageData, sampleStep = 2): boolean {
+  const { data, width, height } = imageData
+  let opaque = 0
+  let ink = 0
+  let darkish = 0
+  for (let y = 0; y < height; y += sampleStep) {
+    for (let x = 0; x < width; x += sampleStep) {
+      const i = (y * width + x) * 4
+      if (data[i + 3] < 128) continue
+      opaque++
+      const L = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]
+      const ch =
+        Math.max(data[i], data[i + 1], data[i + 2]) -
+        Math.min(data[i], data[i + 1], data[i + 2])
+      if (L < 70) darkish++
+      if (L <= 42 && ch < 28) ink++
+    }
+  }
+  if (opaque < 200) return false
+  return ink / opaque >= 0.03 && ink / Math.max(1, darkish) >= 0.4
+}
+
 export type ColorVectorSettings = {
   colorCount: number
   /**
@@ -536,6 +559,7 @@ export async function vectorizeColors(
   disabledColors: number[] = [],
 ): Promise<ColorVectorResult> {
   const imageData = scaleToCanvas(source, settings.maxDim)
+  const clearBackdrop = background.enabled !== false
   // Product-photo backdrops must not become the "primary" palette color.
   removeBackground(imageData, background)
   // Kill muddy AA fringe between black outlines and flat fills before palette.
@@ -543,6 +567,9 @@ export async function vectorizeColors(
   scrubAntiAliasFringe(imageData)
 
   const flat = isFlatDigitalArt(imageData)
+  // Pre-inked clipart: black strokes are the outline plate — keep color SVG
+  // as enamel fills only so proof isn't a fat black blob.
+  const enamelFillsOnly = flat || hasDrawnBlackInk(imageData)
   const { width, height } = imageData
   const detail = detailRetentionParams(settings.detailRetention)
   // Flat clipart needs harder cleanup than soft-shaded art — speckles in white
@@ -556,8 +583,18 @@ export async function vectorizeColors(
     ? Math.max(24, Math.round(width * height * Math.max(detail.minRegionRatio, 0.0002)))
     : Math.max(8, Math.round(width * height * detail.minRegionRatio))
 
-  const palette = extractPalette(imageData, settings.colorCount, 1, flat)
-  let labels = quantizeImage(imageData, palette)
+  const palette = extractPalette(
+    imageData,
+    settings.colorCount,
+    1,
+    flat,
+    clearBackdrop,
+    enamelFillsOnly,
+  )
+  let labels = quantizeImage(imageData, palette, {
+    clearBackdrop,
+    enamelFillsOnly,
+  })
   labels = denoiseLabels(labels, width, height, denoisePasses)
   labels = mergeSmallRegions(labels, width, height, minArea)
   labels = smoothLabelBoundaries(labels, width, height, boundaryPasses)

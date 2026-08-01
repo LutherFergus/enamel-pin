@@ -67,8 +67,8 @@ export function DualControls({
         <span>Remove background</span>
       </label>
       <p className="hint">
-        Clears solid studio backdrops without touching skin tones. Hit Reprocess
-        after changing.
+        Clears solid studio backdrops without touching skin tones. When off, white
+        paper stays in the vector. Hit Reprocess after changing.
       </p>
       {settings.removeBackground && (
         <div className="field">

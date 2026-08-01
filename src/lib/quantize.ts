@@ -67,6 +67,10 @@ export function extractPalette(
   colorCount: number,
   sampleStep = 1,
   flatArt = false,
+  /** When false, keep near-white paper as a real fill (Remove background off). */
+  clearBackdrop = true,
+  /** When true, skip black ink — outline plate owns metal walls. */
+  enamelFillsOnly = false,
 ): Rgb[] {
   const target = Math.max(2, Math.min(colorCount, 32))
   const { data, width, height } = imageData
@@ -104,12 +108,18 @@ export function extractPalette(
       const g = data[i + 1]
       const b = data[i + 2]
       const pixel = { r, g, b }
-      if (isLeftoverBackdrop(pixel)) continue
+      // Only strip near-white when background removal actually ran.
+      if (clearBackdrop && isLeftoverBackdrop(pixel)) continue
       const ch = chroma(pixel) / 255
       const lum = luminance(pixel)
       // Drawn black outline ink is metal, not an enamel fill — don't let it
       // inflate dark muddy bins that steal slots from real colors.
-      if (lum <= 28 && chroma(pixel) < 26) continue
+      if (lum <= 28 && chroma(pixel) < 26) {
+        if (enamelFillsOnly) continue
+        // Still skip scoring black as an "accent" bin weight; extremes add it.
+        // (Keep counting lightly so ensureExtreme can see it when needed.)
+      }
+      if (enamelFillsOnly && lum <= 32 && chroma(pixel) < 34) continue
       const skin = skinScore(pixel)
       const dist = Math.hypot(x - cx, y - cy) / maxDist
       // Center/subject bias + mid-vibrant chroma peak (prefer enamel over gray).
@@ -183,7 +193,7 @@ export function extractPalette(
   const lightN = bins
     .filter((b) => luminance(b) > 232 && chroma(b) < 22)
     .reduce((s, b) => s + b.n, 0)
-  if (darkN / totalN > 0.004) {
+  if (!enamelFillsOnly && darkN / totalN > 0.004) {
     ensureExtreme(bins, selected, target, true, () => {
       neutralCount++
     })
@@ -424,7 +434,13 @@ function refinePalette(imageData: ImageData, palette: Rgb[], sampleStep: number)
   })
 }
 
-export function quantizeImage(imageData: ImageData, palette: Rgb[]): Uint16Array {
+export function quantizeImage(
+  imageData: ImageData,
+  palette: Rgb[],
+  opts: { clearBackdrop?: boolean; enamelFillsOnly?: boolean } = {},
+): Uint16Array {
+  const clearBackdrop = opts.clearBackdrop !== false
+  const enamelFillsOnly = opts.enamelFillsOnly === true
   const { data, width, height } = imageData
   const labels = new Uint16Array(width * height)
   // Darkest low-chroma slot = metal wall / outline ink.
@@ -444,12 +460,24 @@ export function quantizeImage(imageData: ImageData, palette: Rgb[]): Uint16Array
       continue
     }
     const pixel = { r: data[o], g: data[o + 1], b: data[o + 2] }
-    if (isLeftoverBackdrop(pixel)) {
+    // Only treat near-white as empty when background removal is on.
+    if (clearBackdrop && isLeftoverBackdrop(pixel)) {
+      labels[i] = 0xffff
+      continue
+    }
+    // Pre-inked cartoons: black linework belongs on the outline plate, not as
+    // fat enamel fills (that was the "thick distressed black" garbage look).
+    if (enamelFillsOnly && luminance(pixel) <= 34 && chroma(pixel) < 36) {
       labels[i] = 0xffff
       continue
     }
     // Snap drawn outline ink straight to metal black — stops navy/brown fringes.
-    if (luminance(pixel) <= 32 && chroma(pixel) < 34 && blackLum < 45) {
+    if (
+      !enamelFillsOnly &&
+      luminance(pixel) <= 32 &&
+      chroma(pixel) < 34 &&
+      blackLum < 45
+    ) {
       labels[i] = blackIdx
       continue
     }
@@ -460,6 +488,15 @@ export function quantizeImage(imageData: ImageData, palette: Rgb[]): Uint16Array
       // Keep reds/skin from snapping into nearby grays.
       if (isNeutral(palette[c]) && (chroma(pixel) > 40 || isSkinTone(pixel))) d += 28
       if (isSkinTone(pixel) && !isSkinTone(palette[c]) && chroma(palette[c]) < 35) d += 35
+      // Prefer true white for near-white fills (apron, foam, diamonds).
+      if (
+        luminance(pixel) > 235 &&
+        chroma(pixel) < 20 &&
+        luminance(palette[c]) > 235 &&
+        chroma(palette[c]) < 25
+      ) {
+        d -= 18
+      }
       if (d < bestDist) {
         bestDist = d
         best = c
