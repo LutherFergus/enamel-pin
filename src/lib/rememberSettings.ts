@@ -13,7 +13,7 @@ function retentionFromMinRegionRatio(minRegionRatio: number): number {
   return Math.round(Math.max(0, Math.min(100, t * 100)))
 }
 
-const STORAGE_KEY = 'enamel-pin-creator.settings.v3'
+const STORAGE_KEY = 'enamel-pin-creator.settings.v4'
 
 export type RememberedSettings = {
   savedAt: string
