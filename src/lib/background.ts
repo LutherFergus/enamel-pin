@@ -59,7 +59,9 @@ export function skinScore(c: { r: number; g: number; b: number }): number {
 }
 
 /**
- * Knock out edge-connected backdrop. Returns how many pixels were cleared.
+ * Knock out studio backdrop OUTSIDE the subject silhouette only.
+ * Interior whites (apron, foam, diamonds, eyes) are never cleared — even when
+ * they match the paper color — because the flood cannot cross the subject body.
  */
 export function removeBackground(
   imageData: ImageData,
@@ -70,6 +72,7 @@ export function removeBackground(
   }
 
   const { data, width, height } = imageData
+  const n = width * height
   const tolerance = Math.max(4, Math.min(100, options.tolerance ?? 42))
   const samples = sampleEdgeColors(data, width, height)
   if (samples.length < 3) return { cleared: 0, backdrop: null }
@@ -79,19 +82,33 @@ export function removeBackground(
   const bgCh = chroma(backdrop)
   const isDarkBackdrop = bgLum < 40
   const isLightBackdrop = bgLum > 200 && bgCh < 30
-
-  const visited = new Uint8Array(width * height)
-  const stack: number[] = []
   const tol2 = tolerance * tolerance
+
+  // Subject body = ink / color / skin / midtones — NOT near-white paper.
+  // Morph-close seals outline gaps so exterior white cannot flood into apron/foam.
+  const subjectCore = new Uint8Array(n)
+  for (let i = 0; i < n; i++) {
+    const o = i * 4
+    if (data[o + 3] < 16) continue
+    const pixel = { r: data[o], g: data[o + 1], b: data[o + 2] }
+    if (isSubjectCorePixel(pixel)) subjectCore[i] = 255
+  }
+  const subjectBody = morphCloseMask(subjectCore, width, height, 4)
+
+  const visited = new Uint8Array(n)
+  const stack: number[] = []
 
   const tryPush = (x: number, y: number) => {
     if (x < 0 || y < 0 || x >= width || y >= height) return
     const i = y * width + x
-    if (visited[i]) return
-    if (
-      !isBackdropPixel(
+    if (visited[i] || subjectBody[i]) return
+    const o = i * 4
+    // Already clear, or matches backdrop — and outside the subject body.
+    const clearOrBackdrop =
+      data[o + 3] < 16 ||
+      isBackdropPixel(
         data,
-        i * 4,
+        o,
         backdrop,
         tol2,
         tolerance,
@@ -101,6 +118,11 @@ export function removeBackground(
         height,
         i,
       )
+    if (!clearOrBackdrop) return
+    // Never start-clear skin even if misclassified.
+    if (
+      data[o + 3] >= 16 &&
+      isSkinTone({ r: data[o], g: data[o + 1], b: data[o + 2] })
     ) {
       return
     }
@@ -123,8 +145,11 @@ export function removeBackground(
   while (stack.length) {
     const i = stack.pop()!
     const o = i * 4
-    // Final skin guard (belt-and-suspenders)
-    if (data[o + 3] >= 16 && isSkinTone({ r: data[o], g: data[o + 1], b: data[o + 2] })) {
+    if (subjectBody[i]) continue
+    if (
+      data[o + 3] >= 16 &&
+      isSkinTone({ r: data[o], g: data[o + 1], b: data[o + 2] })
+    ) {
       continue
     }
     if (data[o + 3] !== 0) {
@@ -139,15 +164,81 @@ export function removeBackground(
     tryPush(x, y + 1)
   }
 
-  // Second pass: clear leftover near-white grit still edge-touching transparency
-  // (anti-aliased halo) — still never skin.
+  // AA halo only outside the subject — never eat interior foam/apron whites.
   if (isLightBackdrop) {
-    cleared += clearNearWhiteHalos(data, width, height, Math.max(236, bgLum - 8))
+    cleared += clearNearWhiteHalos(
+      data,
+      width,
+      height,
+      Math.max(236, bgLum - 8),
+      subjectBody,
+    )
   }
 
-  despeckleTransparentIslands(data, width, height)
+  despeckleTransparentIslands(data, width, height, subjectBody)
 
   return { cleared, backdrop }
+}
+
+/** Ink, chromatic enamel, skin, midtones — not paper white. */
+function isSubjectCorePixel(pixel: { r: number; g: number; b: number }): boolean {
+  if (isSkinTone(pixel)) return true
+  const L = luminance(pixel)
+  const ch = chroma(pixel)
+  if (L <= 70) return true // black ink / dark fills
+  if (ch >= 18) return true // colored enamel
+  if (L <= 210 && ch >= 10) return true // soft midtones / shading
+  return false
+}
+
+function morphCloseMask(
+  mask: Uint8Array,
+  w: number,
+  h: number,
+  radius: number,
+): Uint8Array {
+  const r = Math.max(1, Math.round(radius))
+  const dil = new Uint8Array(w * h)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!mask[y * w + x]) continue
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (dx * dx + dy * dy > r * r) continue
+          const nx = x + dx
+          const ny = y + dy
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+          dil[ny * w + nx] = 255
+        }
+      }
+    }
+  }
+  const out = new Uint8Array(w * h)
+  for (let y = r; y < h - r; y++) {
+    for (let x = r; x < w - r; x++) {
+      if (!dil[y * w + x]) continue
+      let keep = true
+      for (let dy = -r; dy <= r && keep; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (dx * dx + dy * dy > r * r) continue
+          if (!dil[(y + dy) * w + (x + dx)]) {
+            keep = false
+            break
+          }
+        }
+      }
+      if (keep) out[y * w + x] = 255
+    }
+  }
+  // Keep frame dilation near edges (erode shrinks border).
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (y < r || x < r || y >= h - r || x >= w - r) {
+        if (dil[y * w + x]) out[y * w + x] = 255
+      }
+    }
+  }
+  return out
 }
 
 /** @deprecated Use removeBackground — kept for call-site compatibility. */
@@ -295,12 +386,13 @@ function isBackdropPixel(
   return true
 }
 
-/** Clear near-white pixels that touch already-transparent backdrop (AA halo). */
+/** Clear near-white AA halo outside the subject that touches transparent paper. */
 function clearNearWhiteHalos(
   data: Uint8ClampedArray,
   width: number,
   height: number,
   minLum: number,
+  subjectBody?: Uint8Array,
 ): number {
   let cleared = 0
   let changed = true
@@ -310,7 +402,9 @@ function clearNearWhiteHalos(
     passes++
     for (let y = 1; y < height - 1; y++) {
       for (let x = 1; x < width - 1; x++) {
-        const o = (y * width + x) * 4
+        const i = y * width + x
+        if (subjectBody && subjectBody[i]) continue
+        const o = i * 4
         if (data[o + 3] < 128) continue
         const pixel = { r: data[o], g: data[o + 1], b: data[o + 2] }
         if (isSkinTone(pixel)) continue
@@ -341,10 +435,12 @@ function despeckleTransparentIslands(
   data: Uint8ClampedArray,
   width: number,
   height: number,
+  subjectBody?: Uint8Array,
 ): void {
   for (let y = 1; y < height - 1; y++) {
     for (let x = 1; x < width - 1; x++) {
       const i = y * width + x
+      if (subjectBody && subjectBody[i]) continue
       const o = i * 4
       if (data[o + 3] < 128) continue
       // Never despeckle skin away.

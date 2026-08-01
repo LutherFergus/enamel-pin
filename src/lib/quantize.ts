@@ -23,9 +23,10 @@ function isNeutral(c: Rgb): boolean {
   return chroma(c) < 28
 }
 
-/** Leftover studio white after imperfect knockout — don't spend a palette slot. */
-function isLeftoverBackdrop(c: Rgb): boolean {
-  return luminance(c) >= 248 && chroma(c) <= 12 && !isSkinTone(c)
+/** Leftover studio white after imperfect knockout — unused; exterior clear is
+ * edge-flood only so interior whites (apron/foam) stay enamel fills. */
+function isNearPaperWhite(c: Rgb): boolean {
+  return luminance(c) >= 242 && chroma(c) <= 14 && !isSkinTone(c)
 }
 
 /** Mid-to-vivid accents — enamel fills, not near-black metal. */
@@ -67,8 +68,8 @@ export function extractPalette(
   colorCount: number,
   sampleStep = 1,
   flatArt = false,
-  /** When false, keep near-white paper as a real fill (Remove background off). */
-  clearBackdrop = true,
+  /** Kept for call-site compat; exterior knockout is handled in removeBackground. */
+  _clearBackdrop = true,
   /** When true, skip black ink — outline plate owns metal walls. */
   enamelFillsOnly = false,
 ): Rgb[] {
@@ -108,23 +109,20 @@ export function extractPalette(
       const g = data[i + 1]
       const b = data[i + 2]
       const pixel = { r, g, b }
-      // Only strip near-white when background removal actually ran.
-      if (clearBackdrop && isLeftoverBackdrop(pixel)) continue
       const ch = chroma(pixel) / 255
       const lum = luminance(pixel)
-      // Drawn black outline ink is metal, not an enamel fill — don't let it
-      // inflate dark muddy bins that steal slots from real colors.
-      if (lum <= 28 && chroma(pixel) < 26) {
-        if (enamelFillsOnly) continue
-        // Still skip scoring black as an "accent" bin weight; extremes add it.
-        // (Keep counting lightly so ensureExtreme can see it when needed.)
-      }
+      // Drawn black outline ink is metal, not an enamel fill.
       if (enamelFillsOnly && lum <= 32 && chroma(pixel) < 34) continue
+      if (!enamelFillsOnly && lum <= 28 && chroma(pixel) < 26) {
+        // Still counted via extremes path; skip accent weighting.
+      }
       const skin = skinScore(pixel)
       const dist = Math.hypot(x - cx, y - cy) / maxDist
       // Center/subject bias + mid-vibrant chroma peak (prefer enamel over gray).
+      // Boost near-white fills so apron/foam/diamonds keep a palette slot.
+      const whiteBoost = isNearPaperWhite(pixel) ? 2.8 : 0
       const spatial = 0.55 + 0.45 * (1 - dist)
-      const importance = spatial * (1 + chromaBoost(ch) + 5.5 * skin)
+      const importance = spatial * (1 + chromaBoost(ch) + 5.5 * skin + whiteBoost)
 
       const br = Math.min(BIN - 1, (r * BIN) >> 8)
       const bg = Math.min(BIN - 1, (g * BIN) >> 8)
@@ -198,10 +196,28 @@ export function extractPalette(
       neutralCount++
     })
   }
-  if (lightN / totalN > 0.004) {
+  if (lightN / totalN > 0.002) {
     ensureExtreme(bins, selected, target, false, () => {
       neutralCount++
     })
+    // Prefer a true paper white seed when near-white is present.
+    if (!selected.some((s) => luminance(s) > 245 && chroma(s) < 16)) {
+      const paper = bins
+        .filter((b) => luminance(b) > 240 && chroma(b) < 18)
+        .sort((a, b) => b.n - a.n)[0]
+      if (paper && selected.length < target) {
+        selected.push({
+          r: Math.max(paper.r, 250),
+          g: Math.max(paper.g, 250),
+          b: Math.max(paper.b, 250),
+          n: paper.n,
+          score: paper.score,
+          chroma: chroma({ r: 252, g: 252, b: 252 }),
+          skin: 0,
+        })
+        neutralCount++
+      }
+    }
   }
 
   // 1b) Force best skin/flesh bin if present (minority area, high subject value).
@@ -439,18 +455,24 @@ export function quantizeImage(
   palette: Rgb[],
   opts: { clearBackdrop?: boolean; enamelFillsOnly?: boolean } = {},
 ): Uint16Array {
-  const clearBackdrop = opts.clearBackdrop !== false
   const enamelFillsOnly = opts.enamelFillsOnly === true
   const { data, width, height } = imageData
   const labels = new Uint16Array(width * height)
   // Darkest low-chroma slot = metal wall / outline ink.
   let blackIdx = 0
   let blackLum = Infinity
+  let whiteIdx = -1
+  let whiteLum = -1
   for (let c = 0; c < palette.length; c++) {
     const L = luminance(palette[c])
-    if (chroma(palette[c]) < 40 && L < blackLum) {
+    const ch = chroma(palette[c])
+    if (ch < 40 && L < blackLum) {
       blackLum = L
       blackIdx = c
+    }
+    if (ch < 22 && L > whiteLum) {
+      whiteLum = L
+      whiteIdx = c
     }
   }
   for (let i = 0; i < width * height; i++) {
@@ -460,15 +482,21 @@ export function quantizeImage(
       continue
     }
     const pixel = { r: data[o], g: data[o + 1], b: data[o + 2] }
-    // Only treat near-white as empty when background removal is on.
-    if (clearBackdrop && isLeftoverBackdrop(pixel)) {
+    // Never treat opaque near-white as empty — interior whites are enamel.
+    // Exterior paper is already alpha=0 from removeBackground when enabled.
+    // Pre-inked cartoons: black linework belongs on the outline plate.
+    if (enamelFillsOnly && luminance(pixel) <= 34 && chroma(pixel) < 36) {
       labels[i] = 0xffff
       continue
     }
-    // Pre-inked cartoons: black linework belongs on the outline plate, not as
-    // fat enamel fills (that was the "thick distressed black" garbage look).
-    if (enamelFillsOnly && luminance(pixel) <= 34 && chroma(pixel) < 36) {
-      labels[i] = 0xffff
+    // Snap paper/foam/apron whites to the white slot.
+    if (
+      whiteIdx >= 0 &&
+      whiteLum > 230 &&
+      luminance(pixel) >= 235 &&
+      chroma(pixel) <= 20
+    ) {
+      labels[i] = whiteIdx
       continue
     }
     // Snap drawn outline ink straight to metal black — stops navy/brown fringes.
