@@ -4,7 +4,6 @@ import {
   type RemoveBgOptions,
 } from './background'
 import { punchThinBlackInk } from './blackInk'
-import { extendStripeFillsToEdge } from './extendStripes'
 import { isFlatDigitalArt, scrubAntiAliasFringe } from './flatArt'
 import { dropSpeckIslands, overlapAdjacentFills, smoothLabelBoundaries } from './labelSmooth'
 import {
@@ -632,9 +631,6 @@ export async function vectorizeColors(
   labels = mergeSmallRegions(labels, width, height, minArea)
   labels = smoothLabelBoundaries(labels, width, height, boundaryPasses)
   labels = dropSpeckIslands(labels, width, height, speckMin, palette)
-  // Reflective jacket stripes often stop short of the silhouette — grow them
-  // through dark gear until they meet the edge.
-  labels = extendStripeFillsToEdge(labels, palette, width, height)
   // Overlap only seals sub-pixel / hairline abutments (≪ 0.3mm). Never a
   // second aggressive pass that could swallow sustainable gaps.
   labels = overlapAdjacentFills(labels, width, height)
