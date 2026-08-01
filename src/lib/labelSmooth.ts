@@ -63,12 +63,14 @@ export function smoothLabelBoundaries(
 /**
  * Drop tiny islands that become speck paths in the SVG.
  * Transparent (0xffff) is never reassigned.
+ * Optional palette keeps high-chroma accents (eyes, lips, flowers).
  */
 export function dropSpeckIslands(
   labels: Uint16Array,
   width: number,
   height: number,
   minArea: number,
+  palette?: Array<{ r: number; g: number; b: number }>,
 ): Uint16Array {
   const seen = new Uint8Array(width * height)
   const out = new Uint16Array(labels)
@@ -109,6 +111,12 @@ export function dropSpeckIslands(
     }
 
     if (comp.length >= minArea) continue
+
+    if (palette && color < palette.length) {
+      const p = palette[color]
+      const ch = Math.max(p.r, p.g, p.b) - Math.min(p.r, p.g, p.b)
+      if (ch >= 40 && comp.length >= 3) continue
+    }
 
     let replace = 0xffff
     let best = -1

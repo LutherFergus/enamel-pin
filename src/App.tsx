@@ -13,6 +13,7 @@ import {
   type PmsOverrides,
 } from './lib/colorVectorize'
 import { exportTabLayers } from './lib/exportLayers'
+import { sourceImageToSvg } from './lib/originalSvg'
 import {
   createDualOutputs,
   DEFAULT_DUAL_SETTINGS,
@@ -314,6 +315,21 @@ export default function App() {
     downloadBlob(result.vector.svgBlob, `${sourceName}-vector.svg`)
   }, [result, sourceName])
 
+  const [originalSvgBusy, setOriginalSvgBusy] = useState(false)
+  const downloadOriginalSvg = useCallback(async () => {
+    if (!sourceUrl) return
+    setOriginalSvgBusy(true)
+    setError(null)
+    try {
+      const blob = await sourceImageToSvg(sourceUrl, 2000)
+      downloadBlob(blob, `${sourceName}-original.svg`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Original SVG export failed')
+    } finally {
+      setOriginalSvgBusy(false)
+    }
+  }, [sourceName, sourceUrl])
+
   const downloadProof = useCallback(() => {
     if (!result) return
     downloadBlob(result.proof.svgBlob, `${sourceName}-proof.svg`)
@@ -443,6 +459,14 @@ export default function App() {
           )}
 
           <div className="actions">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => void downloadOriginalSvg()}
+              disabled={!sourceUrl || busy || originalSvgBusy}
+            >
+              {originalSvgBusy ? 'Exporting original…' : 'Download original SVG'}
+            </button>
             <button
               type="button"
               className="btn btn-secondary"

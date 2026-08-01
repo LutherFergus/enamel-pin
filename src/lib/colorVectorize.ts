@@ -3,6 +3,7 @@ import {
   removeBackground,
   type RemoveBgOptions,
 } from './background'
+import { punchThinBlackInk } from './blackInk'
 import { isFlatDigitalArt, scrubAntiAliasFringe } from './flatArt'
 import { dropSpeckIslands, overlapAdjacentFills, smoothLabelBoundaries } from './labelSmooth'
 import {
@@ -194,9 +195,9 @@ export function autoMergeCloseColors(
   const nearest = snapToPms ? palette.map((c) => nearestPms(c)) : null
   // Same nearest PMS merges a bit more eagerly than raw Lab pairs.
   const samePmsGate = Math.max(tolerance, 6)
-  // Near-identical enamel flats (two reds / two oranges) collapse even when
-  // the slider is modest — ΔE~8–16 is still one die color on metal.
-  const sameHueGate = Math.max(tolerance + 4, 16)
+  // Near-identical enamel flats (two reds / two oranges / two golds) collapse even when
+  // the slider is modest — ΔE~8–18 is still one die color on metal.
+  const sameHueGate = Math.max(tolerance + 6, 18)
 
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
@@ -210,13 +211,26 @@ export function autoMergeCloseColors(
         union(i, j)
         continue
       }
-      // Same-hue punchy pair (dirndl reds, banner oranges): merge when close.
+      // Same-hue punchy pair (dirndl reds, banner oranges/golds): merge when close.
       if (
         !vividVsDull &&
-        chI >= 35 &&
-        chJ >= 35 &&
+        chI >= 30 &&
+        chJ >= 30 &&
         de <= sameHueGate &&
         sameHueLab(labs[i], labs[j])
+      ) {
+        union(i, j)
+        continue
+      }
+      // Near-white / cream / pale gold neighbors — collapse paper-adjacent flats.
+      const paleI = labs[i].L > 72 && chI < 55
+      const paleJ = labs[j].L > 72 && chJ < 55
+      if (
+        !vividVsDull &&
+        paleI &&
+        paleJ &&
+        de <= Math.max(sameHueGate, 14) &&
+        (sameHueLab(labs[i], labs[j]) || (chI < 22 && chJ < 22))
       ) {
         union(i, j)
         continue
@@ -554,20 +568,19 @@ export async function vectorizeColors(
   scrubAntiAliasFringe(imageData)
 
   const flat = isFlatDigitalArt(imageData)
-  // Keep black ink in the color SVG (eyes, lettering, pupils). Outline plate
-  // still supplies the die-line; punching blacks to transparent made faceless
-  // vectors and white sliver gaps between fills.
+  // Flat inked clipart: keep solid black enamel (bodice/backdrop), punch only
+  // thin linework to transparent so Proof outline owns metal walls — avoids
+  // both faceless punch-out and fat-black-over-face regressions.
   const { width, height } = imageData
   const detail = detailRetentionParams(settings.detailRetention)
-  // Flat clipart: hard denoise / boundary clean, but don't eat micro features
-  // (eye whites, foam flecks) with an oversized speck threshold.
-  const denoisePasses = flat ? Math.max(detail.denoisePasses, 3) : detail.denoisePasses
-  const boundaryPasses = flat ? Math.max(detail.boundaryPasses, 3) : detail.boundaryPasses
+  // Flat clipart: denoise/boundary clean, but don't eat micro chromatic features.
+  const denoisePasses = flat ? Math.max(detail.denoisePasses, 2) : detail.denoisePasses
+  const boundaryPasses = flat ? Math.max(detail.boundaryPasses, 2) : detail.boundaryPasses
   const speckMin = flat
-    ? Math.max(14, Math.round(width * height * 0.00004))
+    ? Math.max(12, Math.round(width * height * 0.000035))
     : Math.max(12, Math.round(width * height * detail.minRegionRatio * detail.speckScale))
   const minArea = flat
-    ? Math.max(20, Math.round(width * height * Math.max(detail.minRegionRatio, 0.00018)))
+    ? Math.max(16, Math.round(width * height * Math.max(detail.minRegionRatio, 0.00015)))
     : Math.max(8, Math.round(width * height * detail.minRegionRatio))
 
   const palette = extractPalette(
@@ -582,33 +595,36 @@ export async function vectorizeColors(
     clearBackdrop,
     enamelFillsOnly: false,
   })
+  if (flat) {
+    labels = punchThinBlackInk(labels, palette, width, height)
+  }
   labels = denoiseLabels(labels, width, height, denoisePasses)
   labels = mergeSmallRegions(labels, width, height, minArea)
   labels = smoothLabelBoundaries(labels, width, height, boundaryPasses)
-  labels = dropSpeckIslands(labels, width, height, speckMin)
+  labels = dropSpeckIslands(labels, width, height, speckMin, palette)
   if (boundaryPasses > 1) {
-    labels = smoothLabelBoundaries(labels, width, height, flat ? 2 : 1)
+    labels = smoothLabelBoundaries(labels, width, height, flat ? 1 : 1)
   }
   if (flat) {
-    // Second speck pass after boundary smooth — catches leftover foam grit.
     labels = dropSpeckIslands(
       labels,
       width,
       height,
-      Math.max(10, Math.round(speckMin * 0.65)),
+      Math.max(8, Math.round(speckMin * 0.6)),
+      palette,
     )
   }
   // Overlap abutting fills so vector paths seal (no checkerboard hairlines).
   labels = overlapAdjacentFills(labels, width, height)
   if (flat) {
-    labels = overlapAdjacentFills(labels, width, height, { minVotes: 1 })
+    labels = overlapAdjacentFills(labels, width, height)
   }
 
   const areas = countLabelUsage(labels, palette.length)
   const autoMerges = autoMergeCloseColors(
     palette,
     areas,
-    flat ? Math.max(settings.pmsTolerance, 16) : settings.pmsTolerance,
+    flat ? Math.max(settings.pmsTolerance, 18) : settings.pmsTolerance,
     settings.snapToPms,
   )
   const allMerges = combineMerges(palette.length, autoMerges, merges)
@@ -621,7 +637,7 @@ export async function vectorizeColors(
     mergedPalette,
     width,
     height,
-    flat ? Math.max(settings.smoothness, 5) : settings.smoothness,
+    flat ? Math.max(settings.smoothness, 3) : settings.smoothness,
     settings.snapToPms,
     overrides,
     {
@@ -631,8 +647,8 @@ export async function vectorizeColors(
       palette,
       mergeMap,
     },
-    flat ? Math.max(detail.pathomitScale, 1.35) : detail.pathomitScale,
-    flat ? Math.max(settings.pmsTolerance, 16) : settings.pmsTolerance,
+    flat ? Math.max(detail.pathomitScale, 0.95) : detail.pathomitScale,
+    flat ? Math.max(settings.pmsTolerance, 18) : settings.pmsTolerance,
     disabledColors,
   )
 }
