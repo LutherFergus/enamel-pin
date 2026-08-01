@@ -306,46 +306,37 @@ async function maskToTransparentSvg(
 ): Promise<string> {
   await ensurePotrace()
 
-  // 3× supersample: stairs become sub-pixel; bake back to absolute art coords
-  // so the SVG matches imaengine (no scale(0.1) transform group).
-  const scale = 3
-  const tw = w * scale
-  const th = h * scale
-  const bw = new ImageData(tw, th)
-
-  for (let y = 0; y < th; y++) {
-    const sy = (y / scale) | 0
-    for (let x = 0; x < tw; x++) {
-      const sx = (x / scale) | 0
-      const on = imageData.data[(sy * w + sx) * 4 + 3] >= 128
-      const di = (y * tw + x) * 4
-      const v = on ? 0 : 255
-      bw.data[di] = v
-      bw.data[di + 1] = v
-      bw.data[di + 2] = v
-      bw.data[di + 3] = 255
-    }
+  // Native-resolution Potrace (no supersample): micro zooms match imaengine
+  // Vector Q — 2–3× NN supersample + high opttolerance produced stair L runs.
+  // Bake translate/scale(0.1) into absolute C so the SVG has no transform group.
+  const bw = new ImageData(w, h)
+  for (let i = 0; i < w * h; i++) {
+    const on = imageData.data[i * 4 + 3] >= 128
+    const o = i * 4
+    const v = on ? 0 : 255
+    bw.data[o] = v
+    bw.data[o + 1] = v
+    bw.data[o + 2] = v
+    bw.data[o + 3] = 255
   }
 
   const inkHex = `#${[ink.r, ink.g, ink.b]
     .map((v) => v.toString(16).padStart(2, '0'))
     .join('')}`
 
-  // Drop fleck paths; keep white holes as topology.
-  const turdsize = Math.max(6, Math.round(tw * th * 0.000004))
+  // Near-default Potrace curve fit — measured closest to Firefighter_outline ref.
+  const turdsize = Math.max(2, Math.round(w * h * 0.000002))
   const traced = await potrace(bw, {
     turdsize,
     turnpolicy: 4,
-    // Softer corners → longer arcs like imaengine Vector Q.
-    alphamax: 0.78,
+    alphamax: 1.0,
     opticurve: 1,
-    // Higher tolerance → fewer dogbones at zoom.
-    opttolerance: 0.72,
+    opttolerance: 0.2,
     pathonly: false,
     extractcolors: false,
   })
 
-  return bakeOutlineSvg(String(traced), w, h, scale, inkHex)
+  return bakeOutlineSvg(String(traced), w, h, 1, inkHex)
 }
 
 /**

@@ -169,9 +169,6 @@
 
         const w = artSize
         const h = artSize
-        const scale = 3
-        const tw = w * scale
-        const th = h * scale
 
         // Draw source into art canvas, threshold to ink
         const src = document.createElement('canvas')
@@ -183,37 +180,33 @@
         sctx.drawImage(img, 0, 0, w, h)
         const srcData = sctx.getImageData(0, 0, w, h)
 
-        const bw = new ImageData(tw, th)
-        for (let y = 0; y < th; y++) {
-          const sy = (y / scale) | 0
-          for (let x = 0; x < tw; x++) {
-            const sx = (x / scale) | 0
-            const o = (sy * w + sx) * 4
-            const lum =
-              0.2126 * srcData.data[o] +
-              0.7152 * srcData.data[o + 1] +
-              0.0722 * srcData.data[o + 2]
-            const on = lum < 140
-            const di = (y * tw + x) * 4
-            const v = on ? 0 : 255
-            bw.data[di] = v
-            bw.data[di + 1] = v
-            bw.data[di + 2] = v
-            bw.data[di + 3] = 255
-          }
+        // Native-res Potrace — matches imaengine micro curves.
+        const bw = new ImageData(w, h)
+        for (let i = 0; i < w * h; i++) {
+          const o = i * 4
+          const lum =
+            0.2126 * srcData.data[o] +
+            0.7152 * srcData.data[o + 1] +
+            0.0722 * srcData.data[o + 2]
+          const on = lum < 140
+          const v = on ? 0 : 255
+          bw.data[o] = v
+          bw.data[o + 1] = v
+          bw.data[o + 2] = v
+          bw.data[o + 3] = 255
         }
 
-        const turdsize = Math.max(6, Math.round(tw * th * 0.000004))
+        const turdsize = Math.max(2, Math.round(w * h * 0.000002))
         const traced = await potrace(bw, {
           turdsize,
           turnpolicy: 4,
-          alphamax: 0.78,
+          alphamax: 1.0,
           opticurve: 1,
-          opttolerance: 0.72,
+          opttolerance: 0.2,
           pathonly: false,
           extractcolors: false,
         })
-        return bakeOutlineSvg(String(traced), w, h, scale)
+        return bakeOutlineSvg(String(traced), w, h, 1)
       }
 
       document.body.textContent = 'ready'

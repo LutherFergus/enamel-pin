@@ -220,13 +220,14 @@ export async function labelsToCrispSvg(
 
   type Pending = { markup: string; area: number; pathCount: number }
   const pending: Pending[] = []
-  // 3× at high smooth — micro stairs vanish under longer cubic fits.
-  const scale = t >= 0.4 ? 3 : 2
-  const turdsize = Math.max(4, Math.round(w * h * 0.00001))
-  const alphamax = 0.72 + (1 - t) * 0.18
-  const opttolerance = 0.55 + t * 0.35
+  // Native-res Potrace + near-default curve fit (imaengine micro match).
+  // UI smoothness only nudges turdsize / corner threshold slightly.
+  const turdsize = Math.max(2, Math.round(w * h * (0.000003 - t * 0.000001)))
+  const alphamax = 0.92 + t * 0.08
+  const opttolerance = 0.18 + (1 - t) * 0.08
 
-  // Dilate each color 1px in art space so abutting fills seal without strokes.
+  // Dilate 1px so abutting fills seal without hairline seams (imaengine has
+  // zero stroke). 2px over-scallops noisy label boundaries under zoom.
   const dilated = dilateLabels(labels, w, h, 1)
 
   for (const idx of [...used].sort((a, b) => a - b)) {
@@ -236,25 +237,19 @@ export async function labelsToCrispSvg(
     const meta = metaByIndex.get(idx)
     const pmsAttr = meta?.pmsCode ? ` data-pms="${meta.pmsCode}"` : ''
 
-    const tw = w * scale
-    const th = h * scale
-    const bw = new ImageData(tw, th)
-    for (let y = 0; y < th; y++) {
-      const sy = (y / scale) | 0
-      for (let x = 0; x < tw; x++) {
-        const sx = (x / scale) | 0
-        const on = dilated[sy * w + sx] === idx
-        const o = (y * tw + x) * 4
-        const v = on ? 0 : 255
-        bw.data[o] = v
-        bw.data[o + 1] = v
-        bw.data[o + 2] = v
-        bw.data[o + 3] = 255
-      }
+    const bw = new ImageData(w, h)
+    for (let i = 0; i < n; i++) {
+      const on = dilated[i] === idx
+      const o = i * 4
+      const v = on ? 0 : 255
+      bw.data[o] = v
+      bw.data[o + 1] = v
+      bw.data[o + 2] = v
+      bw.data[o + 3] = 255
     }
 
     const traced = await potrace(bw, {
-      turdsize: Math.max(6, turdsize * scale * scale),
+      turdsize,
       turnpolicy: 4,
       alphamax,
       opticurve: 1,
@@ -263,7 +258,7 @@ export async function labelsToCrispSvg(
       extractcolors: false,
     })
 
-    const baked = bakeColorPaths(String(traced), scale, fill, pmsAttr)
+    const baked = bakeColorPaths(String(traced), 1, fill, pmsAttr)
     if (!baked.markup) continue
     pending.push({
       markup: baked.markup,
