@@ -1,4 +1,9 @@
-import { removeBackground, type RemoveBgOptions } from './background'
+import {
+  fillTransparentWithWhite,
+  removeBackground,
+  type RemoveBgOptions,
+} from './background'
+import { isFlatDigitalArt, scrubAntiAliasFringe } from './flatArt'
 import { dropSpeckIslands, overlapAdjacentFills, smoothLabelBoundaries } from './labelSmooth'
 import {
   deltaE76,
@@ -12,6 +17,26 @@ import { labelRegions, mergeSmallRegions } from './regions'
 import { labelsToSmoothSvg } from './traceSvg'
 import type { PaletteColor, Rgb } from './types'
 import { colorDistance, rgbToHex } from './types'
+
+function chromaOf(c: Rgb): number {
+  return Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b)
+}
+
+/** True when two Lab colors share a similar hue angle (ignore lightness). */
+function sameHueLab(
+  a: { L: number; a: number; b: number },
+  b: { L: number; a: number; b: number },
+): boolean {
+  const chromaA = Math.hypot(a.a, a.b)
+  const chromaB = Math.hypot(b.a, b.b)
+  if (chromaA < 12 || chromaB < 12) return false
+  const angA = Math.atan2(a.b, a.a)
+  const angB = Math.atan2(b.b, b.a)
+  let d = Math.abs(angA - angB)
+  if (d > Math.PI) d = 2 * Math.PI - d
+  // ~25° — same enamel family (red vs red-orange), not red vs blue.
+  return d <= 0.44
+}
 
 export type ColorVectorSettings = {
   colorCount: number
@@ -41,7 +66,7 @@ export const DEFAULT_COLOR_VECTOR_SETTINGS: ColorVectorSettings = {
   smoothness: 1,
   maxDim: 1000,
   snapToPms: true,
-  pmsTolerance: 10,
+  pmsTolerance: 12,
 }
 
 /** Map detail retention slider → cleanup / trace knobs. */
@@ -147,10 +172,17 @@ export function autoMergeCloseColors(
     let ra = find(a)
     let rb = find(b)
     if (ra === rb) return
-    // Keep the larger-area color as the merge root.
     const areaA = areas[ra] ?? 0
     const areaB = areas[rb] ?? 0
-    if (areaB > areaA) {
+    const chA = chromaOf(palette[ra])
+    const chB = chromaOf(palette[rb])
+    // Prefer vivid enamel as merge root over dull majority when clearly more chromatic.
+    if (chA > chB + 22 && chA >= 40) {
+      // keep ra
+    } else if (chB > chA + 22 && chB >= 40) {
+      parent[ra] = rb
+      return
+    } else if (areaB > areaA) {
       const tmp = ra
       ra = rb
       rb = tmp
@@ -162,15 +194,36 @@ export function autoMergeCloseColors(
   const nearest = snapToPms ? palette.map((c) => nearestPms(c)) : null
   // Same nearest PMS merges a bit more eagerly than raw Lab pairs.
   const samePmsGate = Math.max(tolerance, 6)
+  // Near-identical enamel flats (two reds / two oranges) collapse even when
+  // the slider is modest — ΔE~8–16 is still one die color on metal.
+  const sameHueGate = Math.max(tolerance + 4, 16)
 
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
-      if (deltaE76(labs[i], labs[j]) <= tolerance) {
+      const chI = chromaOf(palette[i])
+      const chJ = chromaOf(palette[j])
+      // Don't fold a vivid minority into a dull neighbor unless extremely close.
+      const vividVsDull =
+        (chI >= 45 && chJ < 28) || (chJ >= 45 && chI < 28)
+      const de = deltaE76(labs[i], labs[j])
+      if (de <= (vividVsDull ? Math.min(tolerance, 4) : tolerance)) {
+        union(i, j)
+        continue
+      }
+      // Same-hue punchy pair (dirndl reds, banner oranges): merge when close.
+      if (
+        !vividVsDull &&
+        chI >= 35 &&
+        chJ >= 35 &&
+        de <= sameHueGate &&
+        sameHueLab(labs[i], labs[j])
+      ) {
         union(i, j)
         continue
       }
       if (
         nearest &&
+        !vividVsDull &&
         nearest[i].pms.code === nearest[j].pms.code &&
         nearest[i].deltaE <= samePmsGate &&
         nearest[j].deltaE <= samePmsGate
@@ -487,38 +540,75 @@ export async function vectorizeColors(
   disabledColors: number[] = [],
 ): Promise<ColorVectorResult> {
   const imageData = scaleToCanvas(source, settings.maxDim)
-  // Product-photo backdrops must not become the "primary" palette color.
-  removeBackground(imageData, background)
+  const clearBackdrop = background.enabled !== false
+  if (clearBackdrop) {
+    // Product-photo / paper outside the subject → transparent.
+    removeBackground(imageData, background)
+  } else {
+    // Remove-background OFF: keep full paper. Source PNGs often already have
+    // alpha keyed out — composite those holes back onto opaque white.
+    fillTransparentWithWhite(imageData)
+  }
+  // Kill muddy AA fringe between black outlines and flat fills before palette.
+  scrubAntiAliasFringe(imageData)
+  scrubAntiAliasFringe(imageData)
+
+  const flat = isFlatDigitalArt(imageData)
+  // Keep black ink in the color SVG (eyes, lettering, pupils). Outline plate
+  // still supplies the die-line; punching blacks to transparent made faceless
+  // vectors and white sliver gaps between fills.
   const { width, height } = imageData
   const detail = detailRetentionParams(settings.detailRetention)
-  const palette = extractPalette(imageData, settings.colorCount)
-  let labels = quantizeImage(imageData, palette)
-  labels = denoiseLabels(labels, width, height, detail.denoisePasses)
+  // Flat clipart: hard denoise / boundary clean, but don't eat micro features
+  // (eye whites, foam flecks) with an oversized speck threshold.
+  const denoisePasses = flat ? Math.max(detail.denoisePasses, 3) : detail.denoisePasses
+  const boundaryPasses = flat ? Math.max(detail.boundaryPasses, 3) : detail.boundaryPasses
+  const speckMin = flat
+    ? Math.max(14, Math.round(width * height * 0.00004))
+    : Math.max(12, Math.round(width * height * detail.minRegionRatio * detail.speckScale))
+  const minArea = flat
+    ? Math.max(20, Math.round(width * height * Math.max(detail.minRegionRatio, 0.00018)))
+    : Math.max(8, Math.round(width * height * detail.minRegionRatio))
 
-  const minArea = Math.max(
-    8,
-    Math.round(width * height * detail.minRegionRatio),
+  const palette = extractPalette(
+    imageData,
+    settings.colorCount,
+    1,
+    flat,
+    clearBackdrop,
+    false,
   )
+  let labels = quantizeImage(imageData, palette, {
+    clearBackdrop,
+    enamelFillsOnly: false,
+  })
+  labels = denoiseLabels(labels, width, height, denoisePasses)
   labels = mergeSmallRegions(labels, width, height, minArea)
-  // Round off pixel stairs on region boundaries before spline fitting.
-  labels = smoothLabelBoundaries(labels, width, height, detail.boundaryPasses)
-  labels = dropSpeckIslands(
-    labels,
-    width,
-    height,
-    Math.max(12, Math.round(minArea * detail.speckScale)),
-  )
-  if (detail.boundaryPasses > 1) {
-    labels = smoothLabelBoundaries(labels, width, height, 1)
+  labels = smoothLabelBoundaries(labels, width, height, boundaryPasses)
+  labels = dropSpeckIslands(labels, width, height, speckMin)
+  if (boundaryPasses > 1) {
+    labels = smoothLabelBoundaries(labels, width, height, flat ? 2 : 1)
+  }
+  if (flat) {
+    // Second speck pass after boundary smooth — catches leftover foam grit.
+    labels = dropSpeckIslands(
+      labels,
+      width,
+      height,
+      Math.max(10, Math.round(speckMin * 0.65)),
+    )
   }
   // Overlap abutting fills so vector paths seal (no checkerboard hairlines).
   labels = overlapAdjacentFills(labels, width, height)
+  if (flat) {
+    labels = overlapAdjacentFills(labels, width, height, { minVotes: 1 })
+  }
 
   const areas = countLabelUsage(labels, palette.length)
   const autoMerges = autoMergeCloseColors(
     palette,
     areas,
-    settings.pmsTolerance,
+    flat ? Math.max(settings.pmsTolerance, 16) : settings.pmsTolerance,
     settings.snapToPms,
   )
   const allMerges = combineMerges(palette.length, autoMerges, merges)
@@ -531,7 +621,7 @@ export async function vectorizeColors(
     mergedPalette,
     width,
     height,
-    settings.smoothness,
+    flat ? Math.max(settings.smoothness, 5) : settings.smoothness,
     settings.snapToPms,
     overrides,
     {
@@ -541,8 +631,8 @@ export async function vectorizeColors(
       palette,
       mergeMap,
     },
-    detail.pathomitScale,
-    settings.pmsTolerance,
+    flat ? Math.max(detail.pathomitScale, 1.35) : detail.pathomitScale,
+    flat ? Math.max(settings.pmsTolerance, 16) : settings.pmsTolerance,
     disabledColors,
   )
 }
