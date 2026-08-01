@@ -7,11 +7,7 @@ import { PmsChartModal } from './components/PmsChartModal'
 import { Preview, type PreviewTab } from './components/Preview'
 import { SaveScreenshotButton } from './components/SaveScreenshotButton'
 import { generateAiImage, type PinheadsTheme } from './lib/aiGenerate'
-import { cleanupProofDominantCells } from './lib/cleanupProof'
-import {
-  detailRetentionParams,
-  type PmsOverrides,
-} from './lib/colorVectorize'
+import { type PmsOverrides } from './lib/colorVectorize'
 import { exportTabLayers } from './lib/exportLayers'
 import { sourceImageToSvg } from './lib/originalSvg'
 import {
@@ -287,42 +283,6 @@ export default function App() {
     void runPipeline(sourceImage, settings, [], {}, { preserveView: true }, [])
   }, [runPipeline, settings, sourceImage])
 
-  const onCleanup = useCallback(async () => {
-    if (!result || result.vectorPending || result.vector.palette.length === 0) {
-      return
-    }
-    setBusy(true)
-    setError(null)
-    try {
-      const { pathomitScale } = detailRetentionParams(
-        settings.vector.detailRetention,
-      )
-      const cleaned = await cleanupProofDominantCells(result.proof, result.outline, {
-        smoothness: settings.vector.smoothness,
-        pathomitScale,
-        palette: result.vector.palette,
-        maxDim: Math.max(result.outline.widthPx, result.vector.widthPx),
-      })
-      // Cleaned fills blob is only needed inside the final proof SVG.
-      // (vector download stays the pre-cleanup plate.)
-      startTransition(() => {
-        setResult((prev) => {
-          if (!prev) return prev
-          if (prev.final) URL.revokeObjectURL(prev.final.svgUrl)
-          return {
-            ...prev,
-            final: cleaned.proof,
-          }
-        })
-        setViewMode('final')
-      })
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Clean up failed')
-    } finally {
-      setBusy(false)
-    }
-  }, [result, settings])
-
   const onMergesChange = useCallback(
     async (nextMerges: Array<[number, number]>) => {
       setMerges(nextMerges)
@@ -391,11 +351,6 @@ export default function App() {
     downloadBlob(result.proof.svgBlob, `${sourceName}-proof.svg`)
   }, [result, sourceName])
 
-  const downloadFinal = useCallback(() => {
-    if (!result?.final) return
-    downloadBlob(result.final.svgBlob, `${sourceName}-final.svg`)
-  }, [result, sourceName])
-
   const [layerExportBusy, setLayerExportBusy] = useState(false)
 
   const downloadLayers = useCallback(
@@ -439,11 +394,6 @@ export default function App() {
     }
     if (result.vectorPending || result.vector.palette.length === 0) {
       return `Outline ready · color vector still running or unavailable`
-    }
-    if (viewMode === 'final') {
-      return result.final
-        ? `Final SVG · Proof colors + completed shapes inside outline`
-        : `Final · hit Clean up to complete fills from the proof`
     }
     if (viewMode === 'proof') {
       const pmsCount = result.vector.palette.filter((c) => c.pmsCode).length
@@ -546,14 +496,6 @@ export default function App() {
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={downloadFinal}
-              disabled={!result?.final || busy}
-            >
-              Download final SVG
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
               onClick={downloadProof}
               disabled={!result || busy || !!result.vectorPending || result.vector.palette.length === 0}
             >
@@ -612,10 +554,9 @@ export default function App() {
               Download multipage TIFF
             </button>
             <p className="hint">
-              For Sketchbook: use the PSD — File → Open. Layers are Original,
-              Vector, Outline, Proof, and Final (if cleaned). Multipage TIFF is
-              not Sketchbook’s native layered TIFF and usually won’t keep layers
-              there.
+              For Sketchbook: use the PSD — File → Open. Layers bottom → top:
+              Original, Vector, Outline. Multipage TIFF is not Sketchbook’s
+              native layered TIFF and usually won’t keep layers there.
             </p>
           </div>
         </aside>
@@ -656,14 +597,6 @@ export default function App() {
                 >
                   Proof
                 </button>
-                <button
-                  type="button"
-                  className={`tab ${viewMode === 'final' ? 'active' : ''}`}
-                  onClick={() => setViewMode('final')}
-                  disabled={!result || !!result.vectorPending || result.vector.palette.length === 0}
-                >
-                  Final
-                </button>
               </div>
               <div className="preview-actions">
                 <button
@@ -673,20 +606,6 @@ export default function App() {
                   disabled={!sourceImage || busy}
                 >
                   {busy ? 'Processing…' : 'Reprocess'}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary cleanup-btn"
-                  onClick={() => void onCleanup()}
-                  disabled={
-                    !result ||
-                    busy ||
-                    !!result.vectorPending ||
-                    result.vector.palette.length === 0
-                  }
-                  title="Inside each black outline cell, if more than one color is present, fill the cell with the dominant color"
-                >
-                  Clean up
                 </button>
               </div>
             </div>

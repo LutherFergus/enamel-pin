@@ -13,7 +13,7 @@ import type {
 } from '../lib/matchOverlay'
 import type { DualOutputResult } from '../lib/pipeline'
 
-export type PreviewTab = 'source' | 'vector' | 'outline' | 'proof' | 'final'
+export type PreviewTab = 'source' | 'vector' | 'outline' | 'proof'
 
 type Props = {
   viewMode: PreviewTab
@@ -300,18 +300,15 @@ export function Preview({
 }: Props) {
   const [vectorUrl, setVectorUrl] = useState<string | null>(null)
   const [proofUrl, setProofUrl] = useState<string | null>(null)
-  const [finalUrl, setFinalUrl] = useState<string | null>(null)
 
   useEffect(() => {
     if (!result) {
       setVectorUrl(null)
       setProofUrl(null)
-      setFinalUrl(null)
       return
     }
     setVectorUrl(result.vector.svgUrl)
     setProofUrl(result.proof.svgUrl)
-    setFinalUrl(result.final?.svgUrl ?? null)
   }, [result])
 
   if (!sourceUrl && !result) {
@@ -321,8 +318,7 @@ export function Preview({
           <h3>Upload or generate</h3>
           <p>
             You’ll get transparent outline SVG/PNG die-lines, a flat-color
-            vector SVG, and a combined Proof SVG (vector + outline). Use Clean
-            up for a Final SVG with one dominant color per outline cell. Under
+            vector SVG, and a combined Proof SVG (vector + outline). Under
             Settings → Match my SVG, overlay your reference Outline/Vector to
             line up edges.
           </p>
@@ -412,26 +408,6 @@ export function Preview({
       )
       mediaKey = `proof:${proofUrl}`
     }
-  } else if (viewMode === 'final' && finalUrl) {
-    media = (
-      <img
-        src={finalUrl}
-        alt="Final SVG — dominant color per outline cell"
-        draggable={false}
-      />
-    )
-    mediaKey = `final:${finalUrl}`
-  } else if (viewMode === 'final') {
-    media = (
-      <div className="empty-state">
-        <h3>Final</h3>
-        <p>
-          Run <strong>Clean up</strong> to complete incomplete fills inside the
-          outline (keeps Proof colors — doesn’t flatten cells). The result appears here.
-        </p>
-      </div>
-    )
-    mediaKey = 'final:empty'
   }
 
   return (

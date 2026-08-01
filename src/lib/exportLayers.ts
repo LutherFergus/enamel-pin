@@ -62,20 +62,7 @@ async function buildTabCanvases(input: LayerExportInput): Promise<NamedCanvas[]>
     canvas: await rasterizeSvgToCanvas(result.outline.svg, tw, th),
   })
 
-  if (!result.vectorPending && result.vector.palette.length > 0) {
-    layers.push({
-      name: 'Proof',
-      canvas: await rasterizeSvgToCanvas(result.proof.svg, tw, th),
-    })
-  }
-
-  if (result.final) {
-    layers.push({
-      name: 'Final',
-      canvas: await rasterizeSvgToCanvas(result.final.svg, tw, th),
-    })
-  }
-
+  // PSD / TIFF stack: bottom → top = Original, Vector, Outline.
   return layers
 }
 
@@ -97,9 +84,21 @@ async function blobFromPsd(layers: NamedCanvas[]): Promise<Blob> {
     ctx.drawImage(layer.canvas, 0, 0)
   }
 
-  // PSD children: bottom → top (Original under Vector under Outline …).
+  // ag-psd children are top → bottom in the Photoshop/Sketchbook panel.
+  // Build stack as Original (bottom), Vector, Outline (top) → reverse for write.
   // Explicit bounds + 8-bit RGB for Sketchbook / Photoshop File → Open.
   // colorMode 3 = RGB (avoid importing ag-psd const enum under verbatimModuleSyntax).
+  const psdChildren = [...layers].reverse().map((layer) => ({
+    name: layer.name,
+    canvas: layer.canvas,
+    left: 0,
+    top: 0,
+    right: width,
+    bottom: height,
+    opacity: 1,
+    blendMode: 'normal' as const,
+    hidden: false,
+  }))
   const buffer = writePsd(
     {
       width,
@@ -107,17 +106,7 @@ async function blobFromPsd(layers: NamedCanvas[]): Promise<Blob> {
       bitsPerChannel: 8,
       colorMode: 3,
       canvas: composite,
-      children: layers.map((layer) => ({
-        name: layer.name,
-        canvas: layer.canvas,
-        left: 0,
-        top: 0,
-        right: width,
-        bottom: height,
-        opacity: 1,
-        blendMode: 'normal' as const,
-        hidden: false,
-      })),
+      children: psdChildren,
     },
     { generateThumbnail: true, noBackground: true },
   )

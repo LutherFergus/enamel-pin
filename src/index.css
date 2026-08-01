@@ -535,13 +535,6 @@ img {
   margin-left: auto;
 }
 
-.cleanup-btn {
-  flex: 0 0 auto;
-  padding: 0.55rem 1.05rem;
-  font-size: 0.88rem;
-  white-space: nowrap;
-}
-
 .palette {
   display: flex;
   flex-wrap: wrap;
