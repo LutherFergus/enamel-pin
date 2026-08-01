@@ -1,5 +1,6 @@
 import { init as initPotrace, potrace } from 'esm-potrace-wasm'
 import ImageTracer from 'imagetracerjs'
+import { bakeColorPaths } from './potraceBake'
 import type { PaletteColor, Rgb } from './types'
 import { rgbToHex } from './types'
 
@@ -182,17 +183,18 @@ export function labelsToSmoothSvg(
 }
 
 /**
- * Potrace each flat color into smooth cubic Beziers — used for Final / Clean up
- * so enamel edges read as crisp curves instead of ImageTracer stair-waves.
+ * Potrace each flat color into imaengine-style absolute cubic Beziers.
+ * No seam strokes — masks are dilated 1px so fills abut without hairlines.
  */
 export async function labelsToCrispSvg(
   labels: Uint16Array,
   fillRgb: Rgb[],
   metaByIndex: Map<number, PaletteColor>,
-  opts: { widthPx: number; heightPx: number },
+  opts: { widthPx: number; heightPx: number; smoothness?: number },
 ): Promise<{ svg: string; pathCount: number }> {
   await ensurePotrace()
   const { widthPx: w, heightPx: h } = opts
+  const t = Math.max(0, Math.min(5, opts.smoothness ?? 3)) / 5
   const n = w * h
 
   const used = new Set<number>()
@@ -212,13 +214,20 @@ export async function labelsToCrispSvg(
 
   const parts: string[] = [
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" shape-rendering="geometricPrecision">`,
-    `<!-- crisp enamel fills · Potrace curves · PMS Solid Coated\n${legend}\n-->`,
+    `<!-- enamel fills · absolute Potrace cubics · PMS Solid Coated\n${legend}\n-->`,
     '<g id="fills">',
   ]
 
-  type Pending = { markup: string; area: number }
+  type Pending = { markup: string; area: number; pathCount: number }
   const pending: Pending[] = []
-  const turdsize = Math.max(4, Math.round(w * h * 0.000012))
+  // 3× at high smooth — micro stairs vanish under longer cubic fits.
+  const scale = t >= 0.4 ? 3 : 2
+  const turdsize = Math.max(4, Math.round(w * h * 0.00001))
+  const alphamax = 0.72 + (1 - t) * 0.18
+  const opttolerance = 0.55 + t * 0.35
+
+  // Dilate each color 1px in art space so abutting fills seal without strokes.
+  const dilated = dilateLabels(labels, w, h, 1)
 
   for (const idx of [...used].sort((a, b) => a - b)) {
     const c = fillRgb[idx]
@@ -227,8 +236,6 @@ export async function labelsToCrispSvg(
     const meta = metaByIndex.get(idx)
     const pmsAttr = meta?.pmsCode ? ` data-pms="${meta.pmsCode}"` : ''
 
-    // 2× supersample so Potrace fits curves to sub-pixel stairs.
-    const scale = 2
     const tw = w * scale
     const th = h * scale
     const bw = new ImageData(tw, th)
@@ -236,7 +243,7 @@ export async function labelsToCrispSvg(
       const sy = (y / scale) | 0
       for (let x = 0; x < tw; x++) {
         const sx = (x / scale) | 0
-        const on = labels[sy * w + sx] === idx
+        const on = dilated[sy * w + sx] === idx
         const o = (y * tw + x) * 4
         const v = on ? 0 : 255
         bw.data[o] = v
@@ -247,90 +254,64 @@ export async function labelsToCrispSvg(
     }
 
     const traced = await potrace(bw, {
-      turdsize: Math.max(4, turdsize * scale * scale),
+      turdsize: Math.max(6, turdsize * scale * scale),
       turnpolicy: 4,
-      alphamax: 0.88,
+      alphamax,
       opticurve: 1,
-      opttolerance: 0.52,
+      opttolerance,
       pathonly: false,
       extractcolors: false,
     })
 
-    const inner = extractPotraceColorGroup(String(traced), fill, pmsAttr)
-    if (!inner.markup) continue
-
-    // Outer scale maps 2× Potrace space back into the art viewBox.
+    const baked = bakeColorPaths(String(traced), scale, fill, pmsAttr)
+    if (!baked.markup) continue
     pending.push({
-      markup: `<g transform="scale(${1 / scale})">${inner.markup}</g>`,
-      area: inner.area / (scale * scale),
+      markup: baked.markup,
+      area: baked.area,
+      pathCount: baked.pathCount,
     })
   }
 
   pending.sort((a, b) => b.area - a.area)
-  for (const p of pending) parts.push(p.markup)
+  let pathCount = 0
+  for (const p of pending) {
+    parts.push(p.markup)
+    pathCount += p.pathCount
+  }
 
   parts.push('</g></svg>')
-  return { svg: parts.join('\n'), pathCount: pending.length }
+  return { svg: parts.join('\n'), pathCount }
 }
 
-/** Recolor Potrace paths; keep the native y-flip transform untouched. */
-function extractPotraceColorGroup(
-  svg: string,
-  fill: string,
-  pmsAttr: string,
-): { markup: string; area: number } {
-  const s = svg
-    .replace(/<\?xml[^>]*>/i, '')
-    .replace(/<!DOCTYPE[^>]*>/i, '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<rect\b[^>]*\/?>/gi, '')
-    .trim()
-
-  const gMatch =
-    s.match(/<g\b([^>]*)>([\s\S]*)<\/g>\s*<\/svg>/i) ||
-    s.match(/<g\b([^>]*)>([\s\S]*)<\/g>/i)
-  if (!gMatch) return { markup: '', area: 0 }
-
-  const gAttrs = gMatch[1]
-  const body = gMatch[2]
-  const transform = gAttrs.match(/transform="([^"]*)"/i)?.[1]
-
-  const paths = [...body.matchAll(/<path\b[^>]*\/?>/gi)].map((m) => m[0])
-  if (!paths.length) return { markup: '', area: 0 }
-
-  const seam = 2.4 // in supersampled px; halved by outer scale(0.5)
-  const restyled = paths
-    .map((p) => {
-      const open = p
-        .replace(/\sfill="[^"]*"/gi, '')
-        .replace(/\sstroke="[^"]*"/gi, '')
-        .replace(/\sfill-rule="[^"]*"/gi, '')
-        .replace(/\s?\/?>$/, '')
-      return `${open} fill="${fill}" fill-rule="evenodd" stroke="${fill}" stroke-width="${seam.toFixed(2)}" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke fill"${pmsAttr} />`
-    })
-    .join('\n')
-
-  let area = 0
-  for (const m of body.matchAll(/\bd="([^"]*)"/gi)) {
-    const nums = m[1].match(/-?\d+\.?\d*/g)
-    if (!nums || nums.length < 4) continue
-    const xs: number[] = []
-    const ys: number[] = []
-    for (let i = 0; i + 1 < nums.length; i += 2) {
-      xs.push(Number(nums[i]))
-      ys.push(Number(nums[i + 1]))
+/** Grow each labeled region by `radius` px so neighboring fills overlap. */
+function dilateLabels(
+  labels: Uint16Array,
+  w: number,
+  h: number,
+  radius: number,
+): Uint16Array {
+  if (radius < 1) return labels
+  const out = new Uint16Array(labels)
+  const r = Math.max(1, Math.round(radius))
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x
+      const v = labels[i]
+      if (v === 0xffff) continue
+      for (let dy = -r; dy <= r; dy++) {
+        const ny = y + dy
+        if (ny < 0 || ny >= h) continue
+        for (let dx = -r; dx <= r; dx++) {
+          if (dx * dx + dy * dy > r * r) continue
+          const nx = x + dx
+          if (nx < 0 || nx >= w) continue
+          const ni = ny * w + nx
+          if (out[ni] === 0xffff) out[ni] = v
+        }
+      }
     }
-    if (!xs.length) continue
-    area +=
-      Math.max(0, Math.max(...xs) - Math.min(...xs)) *
-      Math.max(0, Math.max(...ys) - Math.min(...ys))
   }
-
-  const transformAttr = transform ? ` transform="${transform}"` : ''
-  return {
-    markup: `<g${transformAttr} fill="${fill}">${restyled}</g>`,
-    area: area || paths.length,
-  }
+  return out
 }
 
 function renderFlat(

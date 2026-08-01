@@ -13,7 +13,7 @@ function retentionFromMinRegionRatio(minRegionRatio: number): number {
   return Math.round(Math.max(0, Math.min(100, t * 100)))
 }
 
-const STORAGE_KEY = 'enamel-pin-creator.settings.v5'
+const STORAGE_KEY = 'enamel-pin-creator.settings.v6'
 
 export type RememberedSettings = {
   savedAt: string
@@ -50,7 +50,7 @@ export function sanitizeSettings(raw: unknown): DualOutputSettings {
       base.outline.invert = o.outline.invert
     }
     if (isFiniteNumber(o.outline.maxDim)) {
-      base.outline.maxDim = Math.max(200, Math.min(2000, o.outline.maxDim))
+      base.outline.maxDim = Math.max(200, Math.min(2400, o.outline.maxDim))
     }
   }
 
@@ -77,7 +77,7 @@ export function sanitizeSettings(raw: unknown): DualOutputSettings {
       base.vector.smoothness = Math.max(0, Math.min(5, Math.round(o.vector.smoothness)))
     }
     if (isFiniteNumber(o.vector.maxDim)) {
-      base.vector.maxDim = Math.max(200, Math.min(2000, o.vector.maxDim))
+      base.vector.maxDim = Math.max(200, Math.min(2400, o.vector.maxDim))
     }
     if (typeof o.vector.snapToPms === 'boolean') {
       base.vector.snapToPms = o.vector.snapToPms
@@ -104,6 +104,7 @@ export function loadRememberedSettings(): RememberedSettings | null {
   try {
     const raw =
       localStorage.getItem(STORAGE_KEY) ??
+      localStorage.getItem('enamel-pin-creator.settings.v5') ??
       localStorage.getItem('enamel-pin-creator.settings.v4') ??
       localStorage.getItem('enamel-pin-creator.settings.v1')
     if (!raw) return null

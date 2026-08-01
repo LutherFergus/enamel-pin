@@ -4,6 +4,7 @@ import {
   removeBackground,
   type RemoveBgOptions,
 } from './background'
+import { bakeOutlineSvg } from './potraceBake'
 import type { Rgb } from './types'
 
 export type OutlineSettings = {
@@ -25,7 +26,8 @@ export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
   sensitivity: 48,
   thickness: 0.8,
   invert: false,
-  maxDim: 1600,
+  // Match imaengine Vector Q outline working size (~1800).
+  maxDim: 1800,
 }
 
 let potraceReady: Promise<void> | null = null
@@ -304,10 +306,9 @@ async function maskToTransparentSvg(
 ): Promise<string> {
   await ensurePotrace()
 
-  // 2× supersample: pixel stairs become sub-pixel to Potrace, then the SVG
-  // viewBox maps back to art size — microscopic curve smooth without fattening
-  // topology (scale is display-only via width/height vs viewBox).
-  const scale = 2
+  // 3× supersample: stairs become sub-pixel; bake back to absolute art coords
+  // so the SVG matches imaengine (no scale(0.1) transform group).
+  const scale = 3
   const tw = w * scale
   const th = h * scale
   const bw = new ImageData(tw, th)
@@ -331,54 +332,20 @@ async function maskToTransparentSvg(
     .join('')}`
 
   // Drop fleck paths; keep white holes as topology.
-  const turdsize = Math.max(4, Math.round(tw * th * 0.000005))
+  const turdsize = Math.max(6, Math.round(tw * th * 0.000004))
   const traced = await potrace(bw, {
     turdsize,
     turnpolicy: 4,
-    // Slightly below 1 → fewer micro-corners on zoomed curves.
-    alphamax: 0.88,
+    // Softer corners → longer arcs like imaengine Vector Q.
+    alphamax: 0.78,
     opticurve: 1,
-    // Higher tolerance → longer smooth arcs through pixel centers.
-    opttolerance: 0.52,
+    // Higher tolerance → fewer dogbones at zoom.
+    opttolerance: 0.72,
     pathonly: false,
     extractcolors: false,
   })
 
-  return restylePotraceSvg(String(traced), w, h, tw, th, inkHex)
-}
-
-function restylePotraceSvg(
-  svg: string,
-  w: number,
-  h: number,
-  tw: number,
-  th: number,
-  inkHex: string,
-): string {
-  let s = svg
-    .replace(/<\?xml[^>]*>/i, '')
-    .replace(/<!DOCTYPE[^>]*>/i, '')
-    .replace(/<rect\b[^>]*\/?>/gi, '')
-    .replace(/\sfill="[^"]*"/gi, ` fill="${inkHex}"`)
-    .replace(/\sfill='[^']*'/gi, ` fill="${inkHex}"`)
-    .trim()
-
-  s = s.replace(/<svg\b[^>]*>/i, () => {
-    return [
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${tw} ${th}" width="${w}" height="${h}" shape-rendering="geometricPrecision">`,
-      `<!-- Transparent enamel die-line outline · Potrace · no background -->`,
-    ].join('\n')
-  })
-
-  // Keep Potrace's translate/scale group; tag it for clarity.
-  s = s.replace(/<g\b([^>]*)>/i, (_m, attrs: string) => {
-    const cleaned = String(attrs)
-      .replace(/\bid="[^"]*"/i, '')
-      .replace(/\sfill="[^"]*"/i, '')
-    return `<g id="outline"${cleaned} fill="${inkHex}">`
-  })
-
-  return s
+  return bakeOutlineSvg(String(traced), w, h, scale, inkHex)
 }
 
 /**

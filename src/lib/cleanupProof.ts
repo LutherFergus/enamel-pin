@@ -12,7 +12,7 @@
 import type { OutlineResult } from './outline'
 import { composeProofSvg, type ProofSvg } from './proofSvg'
 import { dropSpeckIslands, smoothLabelBoundaries } from './labelSmooth'
-import { labelsToSmoothSvg } from './traceSvg'
+import { labelsToCrispSvg } from './traceSvg'
 import type { PaletteColor, Rgb } from './types'
 import { colorDistance, rgbToHex } from './types'
 
@@ -84,10 +84,9 @@ export async function cleanupProofDominantCells(
   )
   cellLabels = fillEnclosedTransparent(cellLabels, data, ink, w, h)
 
-  // Same ImageTracer path as Proof/Vector so Final reads like Proof + fills.
-  const smoothness = Math.max(0, Math.min(5, opts.smoothness ?? 1))
-  const pathomitScale = Math.max(0.35, Math.min(1.2, opts.pathomitScale ?? 0.7))
-  const { svg: fillSvg, pathCount } = labelsToSmoothSvg(
+  // Same absolute-cubic Potrace path as Proof/Vector.
+  const smoothness = Math.max(0, Math.min(5, opts.smoothness ?? 3))
+  const { svg: fillSvg, pathCount } = await labelsToCrispSvg(
     cellLabels,
     fillRgb,
     metaByIndex,
@@ -95,7 +94,6 @@ export async function cleanupProofDominantCells(
       widthPx: w,
       heightPx: h,
       smoothness,
-      pathomitScale,
     },
   )
 

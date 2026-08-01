@@ -15,7 +15,7 @@ import {
 } from './pms'
 import { countLabelUsage, denoiseLabels, extractPalette, quantizeImage } from './quantize'
 import { labelRegions, mergeSmallRegions } from './regions'
-import { labelsToSmoothSvg } from './traceSvg'
+import { labelsToCrispSvg } from './traceSvg'
 import type { PaletteColor, Rgb } from './types'
 import { colorDistance, rgbToHex } from './types'
 
@@ -71,8 +71,9 @@ export const DEFAULT_COLOR_VECTOR_SETTINGS: ColorVectorSettings = {
   detailRetention: 100,
   // Kept in sync with detailRetentionParams(100) for older readers.
   minRegionRatio: 0.00005,
-  smoothness: 2,
-  maxDim: 1000,
+  smoothness: 3,
+  // Match imaengine Vector Q working size (~1652).
+  maxDim: 1652,
   snapToPms: true,
   pmsTolerance: 12,
   minFillMm: 0.3,
@@ -465,21 +466,21 @@ function resolvePaletteColors(
   return { fillRgb, meta: usedMeta }
 }
 
-function stateToSvg(
+async function stateToSvg(
   labels: Uint16Array,
   fillRgb: Rgb[],
   metaByIndex: Map<number, PaletteColor>,
   widthPx: number,
   heightPx: number,
   smoothness: number,
-  pathomitScale = 1,
-): { svg: string; regionCount: number } {
+  _pathomitScale = 1,
+): Promise<{ svg: string; regionCount: number }> {
   const { regions } = labelRegions(labels, widthPx, heightPx)
-  const { svg, pathCount } = labelsToSmoothSvg(labels, fillRgb, metaByIndex, {
+  // Absolute Potrace cubics (imaengine-style) — not ImageTracer quadratics.
+  const { svg, pathCount } = await labelsToCrispSvg(labels, fillRgb, metaByIndex, {
     smoothness,
     widthPx,
     heightPx,
-    pathomitScale,
   })
   return { svg, regionCount: Math.max(regions.length, pathCount) }
 }
@@ -505,7 +506,7 @@ async function packResult(
   }
 }
 
-function assemble(
+async function assemble(
   labels: Uint16Array,
   basePalette: Rgb[],
   widthPx: number,
@@ -548,7 +549,7 @@ function assemble(
   const metaByIndex = new Map(
     metaWithFlags.filter((c) => c.enabled !== false).map((c) => [c.index, c]),
   )
-  const { svg, regionCount } = stateToSvg(
+  const { svg, regionCount } = await stateToSvg(
     finalLabels,
     fillRgb,
     metaByIndex,
