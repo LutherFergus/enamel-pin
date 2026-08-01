@@ -12,6 +12,8 @@ import {
   detailRetentionParams,
   type PmsOverrides,
 } from './lib/colorVectorize'
+import { exportTabLayers } from './lib/exportLayers'
+import { sourceImageToSvg } from './lib/originalSvg'
 import {
   createDualOutputs,
   DEFAULT_DUAL_SETTINGS,
@@ -313,6 +315,21 @@ export default function App() {
     downloadBlob(result.vector.svgBlob, `${sourceName}-vector.svg`)
   }, [result, sourceName])
 
+  const [originalSvgBusy, setOriginalSvgBusy] = useState(false)
+  const downloadOriginalSvg = useCallback(async () => {
+    if (!sourceUrl) return
+    setOriginalSvgBusy(true)
+    setError(null)
+    try {
+      const blob = await sourceImageToSvg(sourceUrl, 2000)
+      downloadBlob(blob, `${sourceName}-original.svg`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Original SVG export failed')
+    } finally {
+      setOriginalSvgBusy(false)
+    }
+  }, [sourceName, sourceUrl])
+
   const downloadProof = useCallback(() => {
     if (!result) return
     downloadBlob(result.proof.svgBlob, `${sourceName}-proof.svg`)
@@ -322,6 +339,26 @@ export default function App() {
     if (!result?.final) return
     downloadBlob(result.final.svgBlob, `${sourceName}-final.svg`)
   }, [result, sourceName])
+
+  const [layerExportBusy, setLayerExportBusy] = useState(false)
+
+  const downloadLayers = useCallback(
+    async (format: 'psd' | 'tiff') => {
+      if (!result || result.vectorPending) return
+      setLayerExportBusy(true)
+      setError(null)
+      try {
+        const blob = await exportTabLayers({ sourceUrl, result, maxDim: 2000 }, format)
+        const ext = format === 'psd' ? 'psd' : 'tiff'
+        downloadBlob(blob, `${sourceName}-layers.${ext}`)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Layer export failed')
+      } finally {
+        setLayerExportBusy(false)
+      }
+    },
+    [result, sourceName, sourceUrl],
+  )
 
   const statusText = useMemo(() => {
     if (error) return error
@@ -425,6 +462,14 @@ export default function App() {
             <button
               type="button"
               className="btn btn-secondary"
+              onClick={() => void downloadOriginalSvg()}
+              disabled={!sourceUrl || busy || originalSvgBusy}
+            >
+              {originalSvgBusy ? 'Exporting original…' : 'Download original SVG'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
               onClick={downloadFinal}
               disabled={!result?.final || busy}
             >
@@ -462,6 +507,40 @@ export default function App() {
             >
               Download vector SVG
             </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void downloadLayers('psd')}
+              disabled={
+                !result ||
+                busy ||
+                layerExportBusy ||
+                !!result.vectorPending ||
+                result.vector.palette.length === 0
+              }
+            >
+              {layerExportBusy ? 'Exporting layers…' : 'Download for Sketchbook (PSD)'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => void downloadLayers('tiff')}
+              disabled={
+                !result ||
+                busy ||
+                layerExportBusy ||
+                !!result.vectorPending ||
+                result.vector.palette.length === 0
+              }
+            >
+              Download multipage TIFF
+            </button>
+            <p className="hint">
+              For Sketchbook: use the PSD — File → Open. Layers are Original,
+              Vector, Outline, Proof, and Final (if cleaned). Multipage TIFF is
+              not Sketchbook’s native layered TIFF and usually won’t keep layers
+              there.
+            </p>
           </div>
         </aside>
 
