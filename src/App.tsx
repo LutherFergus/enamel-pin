@@ -485,7 +485,7 @@ export default function App() {
             </button>
             <button
               type="button"
-              className="btn btn-secondary"
+              className="btn btn-primary"
               onClick={() => void downloadLayers('psd')}
               disabled={
                 !result ||
@@ -495,7 +495,7 @@ export default function App() {
                 result.vector.palette.length === 0
               }
             >
-              {layerExportBusy ? 'Exporting layers…' : 'Download layers PSD'}
+              {layerExportBusy ? 'Exporting layers…' : 'Download for Sketchbook (PSD)'}
             </button>
             <button
               type="button"
@@ -512,10 +512,10 @@ export default function App() {
               Download multipage TIFF
             </button>
             <p className="hint">
-              Packs each tab (Original, Vector, Outline, Proof, Final) into one
-              file. PSD = real Photoshop layers. TIFF = multipage (one page per
-              tab); Photoshop often shows page 1 only — Photopea/Affinity can
-              flip pages.
+              For Sketchbook: use the PSD — File → Open. Layers are Original,
+              Vector, Outline, Proof, and Final (if cleaned). Multipage TIFF is
+              not Sketchbook’s native layered TIFF and usually won’t keep layers
+              there.
             </p>
           </div>
         </aside>

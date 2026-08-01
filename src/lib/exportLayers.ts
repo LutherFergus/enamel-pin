@@ -16,8 +16,8 @@ type NamedCanvas = {
 
 /**
  * Rasterize each preview tab onto the same canvas size, then pack as:
- *  - PSD → real Photoshop layers (recommended)
- *  - TIFF → multipage TIFF (one page per tab; not Adobe layer TIFF)
+ *  - PSD → Sketchbook / Photoshop layers (use this for Sketchbook File → Open)
+ *  - TIFF → multipage TIFF (one page per tab; NOT Sketchbook's native layered TIFF)
  */
 export async function exportTabLayers(
   input: LayerExportInput,
@@ -89,21 +89,34 @@ async function blobFromPsd(layers: NamedCanvas[]): Promise<Blob> {
   composite.width = width
   composite.height = height
   const ctx = composite.getContext('2d')!
+  // Opaque white paper under everything — Sketchbook is happier without a
+  // fully transparent document background.
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, width, height)
   for (const layer of layers) {
     ctx.drawImage(layer.canvas, 0, 0)
   }
 
   // PSD children: bottom → top (Original under Vector under Outline …).
+  // Explicit bounds + 8-bit RGB for Sketchbook / Photoshop File → Open.
+  // colorMode 3 = RGB (avoid importing ag-psd const enum under verbatimModuleSyntax).
   const buffer = writePsd(
     {
       width,
       height,
+      bitsPerChannel: 8,
+      colorMode: 3,
       canvas: composite,
       children: layers.map((layer) => ({
         name: layer.name,
         canvas: layer.canvas,
+        left: 0,
+        top: 0,
+        right: width,
+        bottom: height,
         opacity: 1,
         blendMode: 'normal' as const,
+        hidden: false,
       })),
     },
     { generateThumbnail: true, noBackground: true },
