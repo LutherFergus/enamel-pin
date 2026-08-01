@@ -13,6 +13,10 @@ import {
   type OutlineResult,
   type OutlineSettings,
 } from './outline'
+import {
+  DEFAULT_MATCH_OVERLAY,
+  type MatchOverlaySettings,
+} from './matchOverlay'
 import { composeProofSvg, revokeProof, type ProofSvg } from './proofSvg'
 
 export type DualOutputSettings = {
@@ -22,6 +26,8 @@ export type DualOutputSettings = {
   backgroundTolerance: number
   outline: OutlineSettings
   vector: ColorVectorSettings
+  /** Live overlay of your reference Outline/Vector SVGs in the preview. */
+  match: MatchOverlaySettings
 }
 
 export const DEFAULT_DUAL_SETTINGS: DualOutputSettings = {
@@ -29,6 +35,7 @@ export const DEFAULT_DUAL_SETTINGS: DualOutputSettings = {
   backgroundTolerance: 50,
   outline: { ...DEFAULT_OUTLINE_SETTINGS },
   vector: { ...DEFAULT_COLOR_VECTOR_SETTINGS },
+  match: { ...DEFAULT_MATCH_OVERLAY },
 }
 
 export type DualOutputResult = {

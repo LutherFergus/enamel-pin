@@ -23,6 +23,7 @@ import {
   type DualOutputSettings,
 } from './lib/pipeline'
 import { getPmsChartSize } from './lib/pms'
+import type { MatchReferences } from './lib/matchOverlay'
 import {
   forgetRememberedSettings,
   initialSettings,
@@ -67,13 +68,68 @@ export default function App() {
   const [viewMode, setViewMode] = useState<PreviewTab>('source')
   const [isPending, startTransition] = useTransition()
   const [busy, setBusy] = useState(false)
+  const [matchRefs, setMatchRefs] = useState<MatchReferences>({
+    outlineUrl: null,
+    outlineName: null,
+    vectorUrl: null,
+    vectorName: null,
+  })
 
   useEffect(() => {
     return () => {
       if (sourceUrl) URL.revokeObjectURL(sourceUrl)
       revokeDualUrls(result)
+      if (matchRefs.outlineUrl) URL.revokeObjectURL(matchRefs.outlineUrl)
+      if (matchRefs.vectorUrl) URL.revokeObjectURL(matchRefs.vectorUrl)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- unmount cleanup only
+  }, [])
+
+  const onMatchOutlineFile = useCallback((file: File | null) => {
+    setMatchRefs((prev) => {
+      if (prev.outlineUrl) URL.revokeObjectURL(prev.outlineUrl)
+      if (!file) {
+        return { ...prev, outlineUrl: null, outlineName: null }
+      }
+      return {
+        ...prev,
+        outlineUrl: URL.createObjectURL(file),
+        outlineName: file.name,
+      }
+    })
+    // Auto-enable overlay when a reference is dropped.
+    if (file) {
+      setSettings((s) => {
+        const next = { ...s, match: { ...s.match, enabled: true } }
+        const saved = rememberSettings(next)
+        setSavedLabel(formatSavedAt(saved.savedAt))
+        return next
+      })
+      setViewMode('outline')
+    }
+  }, [])
+
+  const onMatchVectorFile = useCallback((file: File | null) => {
+    setMatchRefs((prev) => {
+      if (prev.vectorUrl) URL.revokeObjectURL(prev.vectorUrl)
+      if (!file) {
+        return { ...prev, vectorUrl: null, vectorName: null }
+      }
+      return {
+        ...prev,
+        vectorUrl: URL.createObjectURL(file),
+        vectorName: file.name,
+      }
+    })
+    if (file) {
+      setSettings((s) => {
+        const next = { ...s, match: { ...s.match, enabled: true } }
+        const saved = rememberSettings(next)
+        setSavedLabel(formatSavedAt(saved.savedAt))
+        return next
+      })
+      setViewMode('vector')
+    }
   }, [])
 
   const onSettingsChange = useCallback((next: DualOutputSettings) => {
@@ -369,9 +425,17 @@ export default function App() {
       return 'Working…'
     }
     if (!result) return 'Upload an image or generate one with AI'
+    const matchOn = settings.match.enabled
+    const matchHint =
+      matchOn &&
+      ((viewMode === 'outline' && matchRefs.outlineUrl) ||
+        (viewMode === 'vector' && matchRefs.vectorUrl) ||
+        (viewMode === 'proof' && (matchRefs.outlineUrl || matchRefs.vectorUrl)))
+        ? ' · overlay match on'
+        : ''
     if (viewMode === 'source') return 'Original artwork'
     if (viewMode === 'outline') {
-      return `Outline SVG · ${result.outline.widthPx}×${result.outline.heightPx} · ${result.outline.pathCount} paths · #000000`
+      return `Outline SVG · ${result.outline.widthPx}×${result.outline.heightPx} · ${result.outline.pathCount} paths · #000000${matchHint}`
     }
     if (result.vectorPending || result.vector.palette.length === 0) {
       return `Outline ready · color vector still running or unavailable`
@@ -383,11 +447,20 @@ export default function App() {
     }
     if (viewMode === 'proof') {
       const pmsCount = result.vector.palette.filter((c) => c.pmsCode).length
-      return `Proof SVG · vector (${result.vector.palette.length} fills / ${pmsCount} PMS) + outline (${result.outline.pathCount} paths)`
+      return `Proof SVG · vector (${result.vector.palette.length} fills / ${pmsCount} PMS) + outline (${result.outline.pathCount} paths)${matchHint}`
     }
     const pmsCount = result.vector.palette.filter((c) => c.pmsCode).length
-    return `Vector SVG · ${result.vector.palette.length} fills · ${pmsCount} PMS · ${result.vector.regionCount} shapes`
-  }, [busy, error, isPending, result, viewMode])
+    return `Vector SVG · ${result.vector.palette.length} fills · ${pmsCount} PMS · ${result.vector.regionCount} shapes${matchHint}`
+  }, [
+    busy,
+    error,
+    isPending,
+    matchRefs.outlineUrl,
+    matchRefs.vectorUrl,
+    result,
+    settings.match.enabled,
+    viewMode,
+  ])
 
   return (
     <div className="app">
@@ -436,6 +509,9 @@ export default function App() {
             disabled={busy}
             savedLabel={savedLabel}
             onResetDefaults={onResetDefaults}
+            matchRefs={matchRefs}
+            onMatchOutlineFile={onMatchOutlineFile}
+            onMatchVectorFile={onMatchVectorFile}
           />
 
           <button
@@ -622,6 +698,8 @@ export default function App() {
             sourceUrl={sourceUrl}
             result={result}
             busy={busy || isPending}
+            match={settings.match}
+            matchRefs={matchRefs}
           />
         </section>
       </div>

@@ -13,7 +13,7 @@ function retentionFromMinRegionRatio(minRegionRatio: number): number {
   return Math.round(Math.max(0, Math.min(100, t * 100)))
 }
 
-const STORAGE_KEY = 'enamel-pin-creator.settings.v6'
+const STORAGE_KEY = 'enamel-pin-creator.settings.v7'
 
 export type RememberedSettings = {
   savedAt: string
@@ -97,6 +97,30 @@ export function sanitizeSettings(raw: unknown): DualOutputSettings {
     }
   }
 
+  if (o.match && typeof o.match === 'object') {
+    if (typeof o.match.enabled === 'boolean') {
+      base.match.enabled = o.match.enabled
+    }
+    if (isFiniteNumber(o.match.oursOpacity)) {
+      base.match.oursOpacity = Math.max(0, Math.min(100, Math.round(o.match.oursOpacity)))
+    }
+    if (isFiniteNumber(o.match.refOpacity)) {
+      base.match.refOpacity = Math.max(0, Math.min(100, Math.round(o.match.refOpacity)))
+    }
+    if (isFiniteNumber(o.match.offsetX)) {
+      base.match.offsetX = Math.max(-50, Math.min(50, Math.round(o.match.offsetX * 10) / 10))
+    }
+    if (isFiniteNumber(o.match.offsetY)) {
+      base.match.offsetY = Math.max(-50, Math.min(50, Math.round(o.match.offsetY * 10) / 10))
+    }
+    if (isFiniteNumber(o.match.scalePct)) {
+      base.match.scalePct = Math.max(50, Math.min(150, Math.round(o.match.scalePct)))
+    }
+    if (typeof o.match.difference === 'boolean') {
+      base.match.difference = o.match.difference
+    }
+  }
+
   return base
 }
 
@@ -104,6 +128,7 @@ export function loadRememberedSettings(): RememberedSettings | null {
   try {
     const raw =
       localStorage.getItem(STORAGE_KEY) ??
+      localStorage.getItem('enamel-pin-creator.settings.v6') ??
       localStorage.getItem('enamel-pin-creator.settings.v5') ??
       localStorage.getItem('enamel-pin-creator.settings.v4') ??
       localStorage.getItem('enamel-pin-creator.settings.v1')
