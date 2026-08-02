@@ -18,6 +18,11 @@ export type OutlineSettings = {
   thickness: number
   /** Invert: white strokes on transparent instead of black. */
   invert: boolean
+  /**
+   * When true, also wall white|gray|black abutments (whiskers, fur highlights).
+   * Off by default — can add noise on soft shading.
+   */
+  outlineNeutrals: boolean
   /** Max working dimension for outline raster. */
   maxDim: number
 }
@@ -26,6 +31,7 @@ export const DEFAULT_OUTLINE_SETTINGS: OutlineSettings = {
   sensitivity: 48,
   thickness: 0.8,
   invert: false,
+  outlineNeutrals: false,
   // Match imaengine Vector Q outline working size (~1800).
   maxDim: 1800,
 }
@@ -103,6 +109,7 @@ export async function extractOutlinePng(
   const { mask: rawMask, lineArt, avgChroma, inkedCartoon } = extractInkMask(
     imageData,
     settings.sensitivity,
+    settings.outlineNeutrals === true,
   )
   let mask = rawMask
 

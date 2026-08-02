@@ -167,6 +167,20 @@ export function DualControls({
         />
         <span>Invert outline (white ink)</span>
       </label>
+      <label className="check-row">
+        <input
+          type="checkbox"
+          checked={settings.outline.outlineNeutrals === true}
+          disabled={disabled}
+          onChange={(e) => patchOutline({ outlineNeutrals: e.target.checked })}
+        />
+        <span>Outline white / gray fills</span>
+      </label>
+      <p className="hint">
+        Adds metal walls between white, gray, and black enamel (whiskers, fur
+        highlights). Can look noisy on soft shading — off by default. Reprocess
+        to apply.
+      </p>
       <div className="field">
         <label>
           <span>Outline resolution</span>

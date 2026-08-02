@@ -49,6 +49,9 @@ export function sanitizeSettings(raw: unknown): DualOutputSettings {
     if (typeof o.outline.invert === 'boolean') {
       base.outline.invert = o.outline.invert
     }
+    if (typeof o.outline.outlineNeutrals === 'boolean') {
+      base.outline.outlineNeutrals = o.outline.outlineNeutrals
+    }
     if (isFiniteNumber(o.outline.maxDim)) {
       base.outline.maxDim = Math.max(200, Math.min(2400, o.outline.maxDim))
     }
