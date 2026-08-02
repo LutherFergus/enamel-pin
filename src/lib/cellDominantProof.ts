@@ -76,9 +76,8 @@ export async function buildDominantCellProof(
     skipMajorityClean: true,
   })
 
-  // Proof outline includes Gestalt-completed walls so metal matches the fills.
-  const closedOutlineSvg = await inkMaskToOutlineSvg(walls, w, h, smoothness)
-  return composeProofSvg(fillSvg, closedOutlineSvg)
+  // Keep the original Outline plate on top — Gestalt walls only guide fills.
+  return composeProofSvg(fillSvg, outline.svg)
 }
 
 /**
@@ -233,32 +232,6 @@ function drawInkLine(
       y += sy
     }
   }
-}
-
-async function inkMaskToOutlineSvg(
-  ink: Uint8Array,
-  w: number,
-  h: number,
-  smoothness: number,
-): Promise<string> {
-  const labels = new Uint16Array(w * h)
-  labels.fill(0xffff)
-  for (let i = 0; i < w * h; i++) {
-    if (ink[i]) labels[i] = 0
-  }
-  const fillRgb: Rgb[] = [{ r: 0, g: 0, b: 0 }]
-  const metaByIndex = new Map<number, PaletteColor>([
-    [0, { r: 0, g: 0, b: 0, hex: '#000000', index: 0, pmsName: 'Outline' }],
-  ])
-  const { svg } = await labelsToCrispSvg(labels, fillRgb, metaByIndex, {
-    widthPx: w,
-    heightPx: h,
-    smoothness,
-    seamDilate: 0,
-    seamStroke: 0,
-    skipMajorityClean: true,
-  })
-  return svg
 }
 
 async function loadInkMaskFromOutline(
