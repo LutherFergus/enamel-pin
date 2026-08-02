@@ -316,11 +316,6 @@ export default function App() {
     setSavedLabel(formatSavedAt(saved.savedAt))
   }, [])
 
-  const downloadOutline = useCallback(() => {
-    if (!result) return
-    downloadBlob(result.outline.pngBlob, `${sourceName}-outline.png`)
-  }, [result, sourceName])
-
   const downloadOutlineSvg = useCallback(() => {
     if (!result) return
     downloadBlob(result.outline.svgBlob, `${sourceName}-outline.svg`)
@@ -508,14 +503,6 @@ export default function App() {
               disabled={!result}
             >
               Download outline SVG
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={downloadOutline}
-              disabled={!result}
-            >
-              Download outline PNG
             </button>
             <button
               type="button"
