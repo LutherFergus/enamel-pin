@@ -233,6 +233,11 @@ export function autoMergeCloseColors(
     for (let j = i + 1; j < n; j++) {
       const chI = chromaOf(palette[i])
       const chJ = chromaOf(palette[j])
+      const Li = labs[i].L
+      const Lj = labs[j].L
+      // Keep mid-gray enamel distinct from near-black metal (cat fur, skull).
+      const bothNeutral = chI < 28 && chJ < 28
+      if (bothNeutral && Math.abs(Li - Lj) > 18) continue
       // Don't fold a vivid minority into a dull neighbor unless extremely close.
       const vividVsDull =
         (chI >= 45 && chJ < 28) || (chJ >= 45 && chI < 28)

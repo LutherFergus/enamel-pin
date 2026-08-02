@@ -61,7 +61,8 @@ type HistBin = {
  *   black + light + 1–2 metal grays + bright accent + dark accent shade
  *   + skin + warm brown — even when accents/skin are minority area.
  *
- * Neutrals are capped so gray ladders cannot steal slots from subject color.
+ * Neutrals are capped so endless gray ladders can’t steal every slot —
+ * but dominant mid-grays (fur highlights, metal, skull shading) are reserved.
  */
 export function extractPalette(
   imageData: ImageData,
@@ -120,9 +121,12 @@ export function extractPalette(
       const dist = Math.hypot(x - cx, y - cy) / maxDist
       // Center/subject bias + mid-vibrant chroma peak (prefer enamel over gray).
       // Boost near-white fills so apron/foam/diamonds keep a palette slot.
+      // Mid-gray fur / metal also needs weight — otherwise oranges steal every slot.
       const whiteBoost = isNearPaperWhite(pixel) ? 2.8 : 0
+      const grayBoost = isMetalGray(pixel) ? 2.4 : 0
       const spatial = 0.55 + 0.45 * (1 - dist)
-      const importance = spatial * (1 + chromaBoost(ch) + 5.5 * skin + whiteBoost)
+      const importance =
+        spatial * (1 + chromaBoost(ch) + 5.5 * skin + whiteBoost + grayBoost)
 
       const br = Math.min(BIN - 1, (r * BIN) >> 8)
       const bg = Math.min(BIN - 1, (g * BIN) >> 8)
@@ -162,7 +166,13 @@ export function extractPalette(
   const selected: Array<Rgb & { n: number; score: number; chroma: number; skin: number }> =
     []
 
-  const neutralCap = Math.max(1, Math.ceil(target * 0.28))
+  const grayAreaFrac =
+    bins.filter((b) => isMetalGray(b)).reduce((s, b) => s + b.n, 0) / totalN
+  // More room for neutrals when mid-gray is a real subject color (cat fur, etc.).
+  const neutralCap = Math.max(
+    1,
+    Math.ceil(target * (grayAreaFrac >= 0.04 ? 0.42 : 0.28)),
+  )
   let neutralCount = 0
 
   const tryAdd = (bin: HistBin, minDist: number): boolean => {
@@ -222,6 +232,10 @@ export function extractPalette(
 
   // 1b) Force best skin/flesh bin if present (minority area, high subject value).
   ensureSkin(bins, selected, target)
+
+  // 1c) Reserve dominant mid-grays before orange shade ladders fill every slot.
+  const grayAdded = ensureMetalGrays(bins, selected, target, totalN)
+  neutralCount += grayAdded
 
   // 2) Subject accents + skin BEFORE majority neutrals (~55% of slots).
   const accentSlots = Math.max(3, Math.round(target * 0.55))
@@ -294,6 +308,107 @@ export function extractPalette(
     selected.map(({ r, g, b }) => ({ r, g, b })),
     sampleStep,
   )
+}
+
+/** Mid-luminance neutrals used as enamel fills (fur highlights, metal, skull). */
+function isMetalGray(c: Rgb): boolean {
+  const L = luminance(c)
+  const ch = chroma(c)
+  return ch < 28 && L >= 48 && L <= 200
+}
+
+/**
+ * Guarantee 1–2 mid-gray slots when gray covers meaningful subject area.
+ * Returns how many neutrals were added (for the neutral cap counter).
+ */
+function ensureMetalGrays(
+  bins: HistBin[],
+  selected: Array<Rgb & { n: number; score: number; chroma: number; skin: number }>,
+  target: number,
+  totalN: number,
+): number {
+  const minArea = Math.max(24, Math.round(totalN * 0.012))
+  const grayBins = bins
+    .filter((b) => isMetalGray(b) && b.n >= minArea)
+    .sort((a, b) => b.n - a.n || b.score - a.score)
+
+  if (!grayBins.length) return 0
+
+  const grayArea = grayBins.reduce((s, b) => s + b.n, 0)
+  if (grayArea / totalN < 0.02) return 0
+
+  const want = grayArea / totalN >= 0.08 ? 2 : 1
+  const picks: HistBin[] = []
+  for (const bin of grayBins) {
+    if (picks.length >= want) break
+    // Distinct lightness bands (light gray vs dark gray).
+    if (picks.some((p) => Math.abs(luminance(p) - luminance(bin)) < 32)) continue
+    // Already have a close gray in the palette.
+    if (selected.some((s) => isMetalGray(s) && dist2(s, bin) < 34 * 34)) continue
+    // Must sit clearly away from black / white extremes already selected.
+    if (
+      selected.some((s) => {
+        const L = luminance(s)
+        if (L < 40 && luminance(bin) - L < 28) return true
+        if (L > 220 && L - luminance(bin) < 28) return true
+        return dist2(s, bin) < 30 * 30
+      })
+    ) {
+      continue
+    }
+    picks.push(bin)
+  }
+
+  let added = 0
+  for (const best of picks) {
+    if (selected.some((s) => dist2(s, best) < 34 * 34)) continue
+
+    const entry = {
+      r: best.r,
+      g: best.g,
+      b: best.b,
+      n: best.n,
+      score: best.score,
+      chroma: best.chroma,
+      skin: best.skin,
+    }
+
+    if (selected.length < target) {
+      selected.push(entry)
+      added++
+      continue
+    }
+
+    // Replace weakest chromatic duplicate / low-value shade to make room.
+    let worst = -1
+    let worstScore = Infinity
+    for (let i = 0; i < selected.length; i++) {
+      const s = selected[i]
+      if (s.skin > 0.1) continue
+      const L = luminance(s)
+      if (L < 35 || L > 230) continue // keep black/white
+      if (isMetalGray(s)) continue
+      // Prefer evicting near-duplicate chromatic shades over unique accents.
+      const twin = selected.some(
+        (o, j) =>
+          j !== i &&
+          o.chroma >= 32 &&
+          s.chroma >= 32 &&
+          dist2(o, s) < 55 * 55,
+      )
+      const score = s.score - (twin ? 0.05 : 0)
+      if (score < worstScore) {
+        worstScore = score
+        worst = i
+      }
+    }
+    if (worst >= 0) {
+      selected[worst] = entry
+      added++
+    }
+  }
+
+  return added
 }
 
 function ensureSkin(
@@ -524,6 +639,11 @@ export function quantizeImage(
         chroma(palette[c]) < 25
       ) {
         d -= 18
+      }
+      // Mid-gray fur / metal must not collapse into near-black metal.
+      if (isMetalGray(pixel)) {
+        if (isMetalGray(palette[c])) d -= 22
+        else if (luminance(palette[c]) < 40 && chroma(palette[c]) < 40) d += 40
       }
       if (d < bestDist) {
         bestDist = d
