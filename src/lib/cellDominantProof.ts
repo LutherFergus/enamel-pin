@@ -1,9 +1,10 @@
 /**
- * Proof = vector fills flattened into outline cells.
+ * Proof = vector fills flattened into Gestalt-closed outline cells.
  *
- * Combine the vector plate with the black die-line, then for every region
- * enclosed by ink walls, fill that whole cell with the dominant enamel color
- * sampled from the vector inside it. Stack the outline on top.
+ * Combine the vector plate with the black die-line. Where the outline is
+ * incomplete (e.g. whiskers crossing gray fur), close walls along strong
+ * color / lightness edges, then fill every enclosed cell with its dominant
+ * enamel color. Stack the completed outline on top.
  */
 
 import type { OutlineResult } from './outline'
@@ -22,7 +23,7 @@ export type DominantCellProofOptions = {
 const CLEAR_ALPHA = 96
 
 /**
- * Build Proof SVG: one dominant fill per black-outline cell + outline walls.
+ * Build Proof SVG: one dominant fill per (Gestalt-closed) outline cell + walls.
  */
 export async function buildDominantCellProof(
   vectorSvg: string,
@@ -44,20 +45,26 @@ export async function buildDominantCellProof(
   ink = closeMask(ink, w, h, 1.2)
 
   const palette = (opts.palette ?? []).filter((c) => c.enabled !== false)
+  // Sample against a clear mask first — Gestalt walls come next.
+  const emptyInk = new Uint8Array(w * h)
   const { labels: sampled, fillRgb, metaByIndex } = sampleVectorToLabels(
     data,
-    ink,
+    emptyInk,
     w,
     h,
     palette,
   )
 
-  // Exterior stays clear; each interior outline cell → one dominant color.
-  let labels = floodCellsWithDominant(sampled, ink, data, w, h)
+  // Gestalt closure: complete broken die-lines along strong fill edges
+  // (white whiskers | gray fur) and bridge nearby ink endpoints.
+  const walls = gestaltCompleteWalls(ink, data, sampled, w, h)
+
+  // Exterior stays clear; each interior closed cell → one dominant color.
+  let labels = floodCellsWithDominant(sampled, walls, data, w, h)
 
   // Grow enamel slightly under metal so Proof doesn’t show hairline gaps.
   labels = overlapAdjacentFills(labels, w, h, { minVotes: 1 })
-  labels = trapFillsUnderInk(labels, ink, w, h, 3)
+  labels = trapFillsUnderInk(labels, walls, w, h, 3)
 
   const smoothness = Math.max(0, Math.min(5, opts.smoothness ?? 3))
   const { svg: fillSvg } = await labelsToCrispSvg(labels, fillRgb, metaByIndex, {
@@ -69,7 +76,189 @@ export async function buildDominantCellProof(
     skipMajorityClean: true,
   })
 
-  return composeProofSvg(fillSvg, outline.svg)
+  // Proof outline includes Gestalt-completed walls so metal matches the fills.
+  const closedOutlineSvg = await inkMaskToOutlineSvg(walls, w, h, smoothness)
+  return composeProofSvg(fillSvg, closedOutlineSvg)
+}
+
+/**
+ * Complete incomplete outline walls using Gestalt-style closure:
+ *  1) wall every strong color / lightness abutment in the vector
+ *  2) bridge short gaps between existing ink endpoints
+ */
+function gestaltCompleteWalls(
+  ink: Uint8Array,
+  data: Uint8ClampedArray,
+  sampled: Uint16Array,
+  w: number,
+  h: number,
+): Uint8Array {
+  const walls = new Uint8Array(ink)
+
+  // 1) Color / lightness edges as virtual metal (white|gray whiskers, etc.).
+  // Prefer strong edges — not every similar orange shade — so outline cells
+  // still flatten soft multi-fills after the walls are closed.
+  const minDist2 = 55 * 55
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x
+      const o = i * 4
+      if (data[o + 3] <= CLEAR_ALPHA) continue
+      for (const [dx, dy] of [
+        [1, 0],
+        [0, 1],
+      ] as const) {
+        const nx = x + dx
+        const ny = y + dy
+        if (nx >= w || ny >= h) continue
+        const ni = ny * w + nx
+        const no = ni * 4
+        if (data[no + 3] <= CLEAR_ALPHA) continue
+
+        const dr = data[o] - data[no]
+        const dg = data[o + 1] - data[no + 1]
+        const db = data[o + 2] - data[no + 2]
+        const dist2 = dr * dr + dg * dg + db * db
+        if (dist2 < minDist2) continue
+
+        const La = 0.2126 * data[o] + 0.7152 * data[o + 1] + 0.0722 * data[o + 2]
+        const Lb = 0.2126 * data[no] + 0.7152 * data[no + 1] + 0.0722 * data[no + 2]
+        const chA =
+          Math.max(data[o], data[o + 1], data[o + 2]) -
+          Math.min(data[o], data[o + 1], data[o + 2])
+        const chB =
+          Math.max(data[no], data[no + 1], data[no + 2]) -
+          Math.min(data[no], data[no + 1], data[no + 2])
+        const lumGap = Math.abs(La - Lb)
+
+        // Soft AA only: dull neighbors with similar lightness.
+        if (chA < 12 && chB < 12 && lumGap < 40) continue
+
+        // Gestalt: wall high-contrast fill edges, especially neutral ladders
+        // (white whisker | gray fur | black) and vivid color abutments.
+        const neutralLadder =
+          chA < 36 && chB < 36 && lumGap >= 40
+        const chromaticEdge = (chA >= 28 || chB >= 28) && dist2 >= minDist2
+        const labelBreak =
+          sampled[i] !== 0xffff &&
+          sampled[ni] !== 0xffff &&
+          sampled[i] !== sampled[ni] &&
+          (lumGap >= 35 || dist2 >= 80 * 80)
+
+        if (!neutralLadder && !chromaticEdge && !labelBreak) continue
+        walls[i] = 255
+        walls[ni] = 255
+      }
+    }
+  }
+
+  // 2) Bridge short broken outline strokes (endpoint → endpoint).
+  bridgeInkGaps(walls, w, h, 10)
+
+  // Keep walls slightly thicker so thin whisker cells stay sealed.
+  return dilateMask(walls, w, h, 0.7)
+}
+
+/** Connect nearby ink endpoints with a short Bresenham stroke. */
+function bridgeInkGaps(ink: Uint8Array, w: number, h: number, maxGap: number) {
+  const endpoints: Array<{ x: number; y: number }> = []
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x
+      if (!ink[i]) continue
+      let n = 0
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue
+          if (ink[(y + dy) * w + (x + dx)]) n++
+        }
+      }
+      // Tip / break: 1–2 ink neighbors in the 8-ring.
+      if (n > 0 && n <= 2) endpoints.push({ x, y })
+    }
+  }
+
+  const maxGap2 = maxGap * maxGap
+  const used = new Uint8Array(endpoints.length)
+  for (let a = 0; a < endpoints.length; a++) {
+    if (used[a]) continue
+    let best = -1
+    let bestD = Infinity
+    const pa = endpoints[a]
+    for (let b = a + 1; b < endpoints.length; b++) {
+      if (used[b]) continue
+      const pb = endpoints[b]
+      const dx = pa.x - pb.x
+      const dy = pa.y - pb.y
+      const d2 = dx * dx + dy * dy
+      if (d2 < 4 || d2 > maxGap2) continue
+      if (d2 < bestD) {
+        bestD = d2
+        best = b
+      }
+    }
+    if (best < 0) continue
+    used[a] = 1
+    used[best] = 1
+    drawInkLine(ink, w, h, pa.x, pa.y, endpoints[best].x, endpoints[best].y)
+  }
+}
+
+function drawInkLine(
+  ink: Uint8Array,
+  w: number,
+  h: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+) {
+  let x = x0
+  let y = y0
+  const dx = Math.abs(x1 - x0)
+  const dy = Math.abs(y1 - y0)
+  const sx = x0 < x1 ? 1 : -1
+  const sy = y0 < y1 ? 1 : -1
+  let err = dx - dy
+  for (;;) {
+    if (x >= 0 && y >= 0 && x < w && y < h) ink[y * w + x] = 255
+    if (x === x1 && y === y1) break
+    const e2 = 2 * err
+    if (e2 > -dy) {
+      err -= dy
+      x += sx
+    }
+    if (e2 < dx) {
+      err += dx
+      y += sy
+    }
+  }
+}
+
+async function inkMaskToOutlineSvg(
+  ink: Uint8Array,
+  w: number,
+  h: number,
+  smoothness: number,
+): Promise<string> {
+  const labels = new Uint16Array(w * h)
+  labels.fill(0xffff)
+  for (let i = 0; i < w * h; i++) {
+    if (ink[i]) labels[i] = 0
+  }
+  const fillRgb: Rgb[] = [{ r: 0, g: 0, b: 0 }]
+  const metaByIndex = new Map<number, PaletteColor>([
+    [0, { r: 0, g: 0, b: 0, hex: '#000000', index: 0, pmsName: 'Outline' }],
+  ])
+  const { svg } = await labelsToCrispSvg(labels, fillRgb, metaByIndex, {
+    widthPx: w,
+    heightPx: h,
+    smoothness,
+    seamDilate: 0,
+    seamStroke: 0,
+    skipMajorityClean: true,
+  })
+  return svg
 }
 
 async function loadInkMaskFromOutline(

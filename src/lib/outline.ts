@@ -570,8 +570,8 @@ function addSilhouetteRing(
 
 /**
  * Paint metal walls wherever two opaque fill colors abut (white|blue diamonds,
- * red|yellow stripes, etc.). Needed for inked cartoons that only drew outer
- * black strokes and left flat color regions sharing an edge.
+ * red|yellow stripes, white|gray whiskers, etc.). Gestalt closure for shapes
+ * that were drawn without a complete black stroke around every fill.
  */
 function addColorBoundaryContours(
   mask: Uint8Array,
@@ -581,6 +581,9 @@ function addColorBoundaryContours(
   minRgbDist: number,
 ) {
   const minDist2 = minRgbDist * minRgbDist
+  const lumAt = (o: number) =>
+    0.2126 * data[o] + 0.7152 * data[o + 1] + 0.0722 * data[o + 2]
+
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = y * w + x
@@ -601,8 +604,10 @@ function addColorBoundaryContours(
         const dg = data[o + 1] - data[no + 1]
         const db = data[o + 2] - data[no + 2]
         if (dr * dr + dg * dg + db * db < minDist2) continue
-        // Ignore soft gray AA; require a real chromatic fill on at least one side.
-        if (ch < 12 && chromaAt(data, no) < 12) continue
+        const chN = chromaAt(data, no)
+        // Soft gray AA: skip only when both sides are dull AND lightness is close.
+        // White|gray|black whisker/fur edges must still get metal walls.
+        if (ch < 12 && chN < 12 && Math.abs(lumAt(o) - lumAt(no)) < 40) continue
         mask[i] = 255
         mask[ni] = 255
       }
