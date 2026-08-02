@@ -348,23 +348,22 @@ export default function App() {
 
   const [layerExportBusy, setLayerExportBusy] = useState(false)
 
-  const downloadLayers = useCallback(
-    async (format: 'psd' | 'tiff') => {
-      if (!result || result.vectorPending) return
-      setLayerExportBusy(true)
-      setError(null)
-      try {
-        const blob = await exportTabLayers({ sourceUrl, result, maxDim: 2000 }, format)
-        const ext = format === 'psd' ? 'psd' : 'tiff'
-        downloadBlob(blob, `${sourceName}-layers.${ext}`)
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Layer export failed')
-      } finally {
-        setLayerExportBusy(false)
-      }
-    },
-    [result, sourceName, sourceUrl],
-  )
+  const downloadLayers = useCallback(async () => {
+    if (!result || result.vectorPending) return
+    setLayerExportBusy(true)
+    setError(null)
+    try {
+      const blob = await exportTabLayers(
+        { sourceUrl, result, maxDim: 2000 },
+        'psd',
+      )
+      downloadBlob(blob, `${sourceName}-layers.psd`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Layer export failed')
+    } finally {
+      setLayerExportBusy(false)
+    }
+  }, [result, sourceName, sourceUrl])
 
   const statusText = useMemo(() => {
     if (error) return error
@@ -391,8 +390,7 @@ export default function App() {
       return `Outline ready · color vector still running or unavailable`
     }
     if (viewMode === 'proof') {
-      const pmsCount = result.vector.palette.filter((c) => c.pmsCode).length
-      return `Proof SVG · vector (${result.vector.palette.length} fills / ${pmsCount} PMS) + outline (${result.outline.pathCount} paths)${matchHint}`
+      return `Proof SVG · each outline cell filled with its dominant vector color · ${result.outline.pathCount} paths${matchHint}`
     }
     const pmsCount = result.vector.palette.filter((c) => c.pmsCode).length
     return `Vector SVG · ${result.vector.palette.length} fills · ${pmsCount} PMS · ${result.vector.regionCount} shapes${matchHint}`
@@ -416,7 +414,8 @@ export default function App() {
         </div>
         <p className="lede">
           Upload or generate artwork for soft enamel pins, then get transparent outline
-          SVG die-lines, a flat-color vector SVG, and a combined Proof SVG.
+          SVG die-lines, a flat-color vector SVG, and a Proof that fills each
+          outline cell with its dominant vector color.
         </p>
       </header>
 
@@ -515,7 +514,7 @@ export default function App() {
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() => void downloadLayers('psd')}
+              onClick={() => void downloadLayers()}
               disabled={
                 !result ||
                 busy ||
@@ -526,24 +525,9 @@ export default function App() {
             >
               {layerExportBusy ? 'Exporting layers…' : 'Download for Sketchbook (PSD)'}
             </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => void downloadLayers('tiff')}
-              disabled={
-                !result ||
-                busy ||
-                layerExportBusy ||
-                !!result.vectorPending ||
-                result.vector.palette.length === 0
-              }
-            >
-              Download multipage TIFF
-            </button>
             <p className="hint">
               For Sketchbook: use the PSD — File → Open. Layers bottom → top:
-              Outline, Vector, Original. Multipage TIFF is not Sketchbook’s
-              native layered TIFF and usually won’t keep layers there.
+              Outline, Vector, Original.
             </p>
           </div>
         </aside>

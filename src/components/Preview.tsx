@@ -318,9 +318,9 @@ export function Preview({
           <h3>Upload or generate</h3>
           <p>
             You’ll get transparent outline SVG die-lines, a flat-color
-            vector SVG, and a combined Proof SVG (vector + outline). Under
-            Settings → Match my SVG, overlay your reference Outline/Vector to
-            line up edges.
+            vector SVG, and a Proof that fills each black-outline cell with
+            its dominant vector color. Under Settings → Match my SVG, overlay
+            your reference Outline/Vector to line up edges.
           </p>
         </div>
       </div>
@@ -392,7 +392,7 @@ export function Preview({
       media = (
         <MatchStack
           oursUrl={proofUrl}
-          oursAlt="Proof SVG — vector fills with outline die-lines"
+          oursAlt="Proof SVG — dominant color per outline cell"
           refUrl={proofRef}
           match={match}
         />
@@ -402,7 +402,7 @@ export function Preview({
       media = (
         <img
           src={proofUrl}
-          alt="Proof SVG — vector fills with outline die-lines"
+          alt="Proof SVG — dominant color per outline cell"
           draggable={false}
         />
       )
