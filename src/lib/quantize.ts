@@ -1,4 +1,4 @@
-import { isSkinTone, skinScore } from './background'
+import { isSkinTone } from './background'
 import type { Rgb } from './types'
 import { colorDistance } from './types'
 
@@ -23,13 +23,11 @@ function isNeutral(c: Rgb): boolean {
   return chroma(c) < 28
 }
 
-/** Leftover studio white after imperfect knockout — don't spend a palette slot. */
-function isLeftoverBackdrop(c: Rgb): boolean {
-  return luminance(c) >= 248 && chroma(c) <= 12 && !isSkinTone(c)
-}
-
-function isAccent(c: Rgb): boolean {
-  return chroma(c) >= 45 || skinScore(c) > 0.12
+/** Mid-luminance neutrals used as enamel fills (fur highlights, metal, skull). */
+function isMetalGray(c: Rgb): boolean {
+  const L = luminance(c)
+  const ch = chroma(c)
+  return ch < 28 && L >= 48 && L <= 200
 }
 
 type HistBin = {
@@ -37,53 +35,33 @@ type HistBin = {
   g: number
   b: number
   n: number
-  /** Subject-aware importance (not raw majority). */
-  score: number
-  chroma: number
-  skin: number
 }
 
 /**
- * Subject-aware palette extraction for enamel fills.
+ * Palette from subject pixel percentages after background removal.
  *
- * Learned from Vectorizer.AI / VectorQ motorcycle pin-up refs:
- *   black + light + 1–2 metal grays + bright accent + dark accent shade
- *   + skin + warm brown — even when accents/skin are minority area.
- *
- * Neutrals are capped so gray ladders cannot steal slots from subject color.
+ * Opaque pixels only (alpha already cleared outside the subject). Colors are
+ * ranked by area share; similar bins merge via a minimum RGB distance so the
+ * top N slots match Vectorizer.AI-style dominant-color control.
  */
 export function extractPalette(
   imageData: ImageData,
   colorCount: number,
   sampleStep = 1,
+  flatArt = false,
+  /** Kept for call-site compat; exterior knockout is handled in removeBackground. */
+  _clearBackdrop = true,
+  /** When true, skip black ink — outline plate owns metal walls. */
+  enamelFillsOnly = false,
 ): Rgb[] {
   const target = Math.max(2, Math.min(colorCount, 32))
   const { data, width, height } = imageData
-
-  // Opaque centroid → spatial subject bias (edges/background weigh less).
-  let sx = 0
-  let sy = 0
-  let sn = 0
-  for (let y = 0; y < height; y += Math.max(2, sampleStep * 2)) {
-    for (let x = 0; x < width; x += Math.max(2, sampleStep * 2)) {
-      const i = (y * width + x) * 4
-      if (data[i + 3] < 128) continue
-      sx += x
-      sy += y
-      sn++
-    }
-  }
-  const cx = sn > 0 ? sx / sn : width / 2
-  const cy = sn > 0 ? sy / sn : height / 2
-  const maxDist = Math.hypot(Math.max(cx, width - cx), Math.max(cy, height - cy)) || 1
 
   const counts = new Float64Array(BIN * BIN * BIN)
   const sumR = new Float64Array(BIN * BIN * BIN)
   const sumG = new Float64Array(BIN * BIN * BIN)
   const sumB = new Float64Array(BIN * BIN * BIN)
-  const weightSum = new Float64Array(BIN * BIN * BIN)
 
-  let totalW = 0
   let totalN = 0
   for (let y = 0; y < height; y += sampleStep) {
     for (let x = 0; x < width; x += sampleStep) {
@@ -92,14 +70,10 @@ export function extractPalette(
       const r = data[i]
       const g = data[i + 1]
       const b = data[i + 2]
-      const pixel = { r, g, b }
-      if (isLeftoverBackdrop(pixel)) continue
-      const ch = chroma(pixel) / 255
-      const skin = skinScore(pixel)
-      const dist = Math.hypot(x - cx, y - cy) / maxDist
-      // Center/subject bias + strong chroma/skin boost (refs keep reds & flesh).
-      const spatial = 0.55 + 0.45 * (1 - dist)
-      const importance = spatial * (1 + 4.2 * ch * ch + 5.5 * skin)
+      const lum = luminance({ r, g, b })
+      const ch = chroma({ r, g, b })
+      // Drawn black outline ink is metal, not an enamel fill.
+      if (enamelFillsOnly && lum <= 32 && ch < 34) continue
 
       const br = Math.min(BIN - 1, (r * BIN) >> 8)
       const bg = Math.min(BIN - 1, (g * BIN) >> 8)
@@ -109,8 +83,6 @@ export function extractPalette(
       sumR[idx] += r
       sumG[idx] += g
       sumB[idx] += b
-      weightSum[idx] += importance
-      totalW += importance
       totalN += 1
     }
   }
@@ -123,213 +95,68 @@ export function extractPalette(
   for (let i = 0; i < counts.length; i++) {
     const n = counts[i]
     if (n < 1) continue
-    const c: Rgb = {
+    bins.push({
       r: Math.round(sumR[i] / n),
       g: Math.round(sumG[i] / n),
       b: Math.round(sumB[i] / n),
-    }
-    const ch = chroma(c)
-    const skin = skinScore(c)
-    const score = weightSum[i] / totalW
-    bins.push({ ...c, n, score, chroma: ch, skin })
+      n,
+    })
   }
 
-  bins.sort((a, b) => b.score - a.score)
+  // Largest subject areas first.
+  bins.sort((a, b) => b.n - a.n)
 
-  const selected: Array<Rgb & { n: number; score: number; chroma: number; skin: number }> =
-    []
+  const minDist = flatArt ? 38 : 28
+  const selected: Array<Rgb & { n: number }> = []
 
-  const neutralCap = Math.max(2, Math.ceil(target * 0.5))
-  let neutralCount = 0
-
-  const tryAdd = (bin: HistBin, minDist: number): boolean => {
+  const tryAdd = (bin: HistBin, gap: number): boolean => {
     for (const s of selected) {
-      if (dist2(bin, s) < minDist * minDist) return false
+      if (dist2(bin, s) < gap * gap) return false
     }
-    const neutral = isNeutral(bin)
-    if (neutral && neutralCount >= neutralCap) return false
-    selected.push({
-      r: bin.r,
-      g: bin.g,
-      b: bin.b,
-      n: bin.n,
-      score: bin.score,
-      chroma: bin.chroma,
-      skin: bin.skin,
-    })
-    if (neutral) neutralCount++
+    selected.push({ r: bin.r, g: bin.g, b: bin.b, n: bin.n })
     return true
   }
 
-  // 1) Structural extremes first (black / light) — Vectorizer always keeps these.
-  ensureExtreme(bins, selected, target, true, () => {
-    neutralCount++
-  })
-  ensureExtreme(bins, selected, target, false, () => {
-    neutralCount++
-  })
+  // Seed true black / white when they own meaningful subject area.
+  const darkShare =
+    bins.filter((b) => luminance(b) < 28).reduce((s, b) => s + b.n, 0) / totalN
+  const lightShare =
+    bins
+      .filter((b) => luminance(b) > 232 && chroma(b) < 22)
+      .reduce((s, b) => s + b.n, 0) / totalN
 
-  // 1b) Force best skin/flesh bin if present (minority area, high subject value).
-  ensureSkin(bins, selected, target)
-
-  // 2) Subject accents + skin BEFORE majority neutrals (~40% of slots).
-  const accentSlots = Math.max(2, Math.round(target * 0.4))
-  const accents = [...bins].sort((a, b) => {
-    const sa = (a.chroma / 255) * 2.2 + a.skin * 3.5 + Math.log2(2 + a.n) * 0.15
-    const sb = (b.chroma / 255) * 2.2 + b.skin * 3.5 + Math.log2(2 + b.n) * 0.15
-    return sb - sa
-  })
-  for (const bin of accents) {
-    if (selected.length >= Math.min(target, 2 + accentSlots)) break
-    if (!isAccent(bin) && bin.skin < 0.1) continue
-    tryAdd(bin, 38)
+  if (!enamelFillsOnly && darkShare > 0.004) {
+    const black = bins.find((b) => luminance(b) < 28)
+    if (black) tryAdd(black, minDist)
+  }
+  if (lightShare > 0.002) {
+    const white = bins.find((b) => luminance(b) > 232 && chroma(b) < 22)
+    if (white) tryAdd(white, minDist)
   }
 
-  // 3) Shade companions for accents (dark red under bright red, etc.).
   for (const bin of bins) {
     if (selected.length >= target) break
-    if (bin.chroma < 40) continue
-    // Prefer darker/lighter sibling of an already-selected accent hue family.
-    const related = selected.some((s) => {
-      if (s.chroma < 40) return false
-      const hueDist =
-        Math.abs(s.r - bin.r) + Math.abs(s.g - bin.g) + Math.abs(s.b - bin.b)
-      const lumGap = Math.abs(luminance(s) - luminance(bin))
-      return hueDist < 160 && lumGap > 25 && lumGap < 120
-    })
-    if (!related) continue
-    tryAdd(bin, 34)
+    tryAdd(bin, minDist)
+  }
+  // Relax distance if we still have empty slots.
+  if (selected.length < target) {
+    for (const bin of bins) {
+      if (selected.length >= target) break
+      tryAdd(bin, Math.max(16, minDist - 10))
+    }
   }
 
-  // 4) Remaining by subject-weighted score (population still matters, but
-  //    neutrals are capped so gray ladders can't dominate).
-  for (const bin of bins) {
-    if (selected.length >= target) break
-    tryAdd(bin, 32)
-  }
-
-  // Fill if accent-first left gaps (rare).
-  for (const bin of bins) {
-    if (selected.length >= target) break
-    tryAdd(bin, 26)
-  }
-
-  // Order: importance score first so PMS snap / UI show subject colors early,
-  // with population as tie-breaker.
-  selected.sort((a, b) => b.score - a.score || b.n - a.n)
-
-  return refinePalette(
+  const refined = refinePalette(
     imageData,
     selected.map(({ r, g, b }) => ({ r, g, b })),
     sampleStep,
   )
-}
 
-function ensureSkin(
-  bins: HistBin[],
-  selected: Array<Rgb & { n: number; score: number; chroma: number; skin: number }>,
-  target: number,
-) {
-  const skinBins = bins
-    .filter((b) => b.skin > 0.12 && b.n >= 8)
-    .sort((a, b) => b.skin * Math.log2(2 + b.n) - a.skin * Math.log2(2 + a.n))
-  if (!skinBins.length) return
-  const best = skinBins[0]
-  if (selected.some((s) => dist2(s, best) < 40 * 40)) return
-
-  const push = () => {
-    selected.push({
-      r: best.r,
-      g: best.g,
-      b: best.b,
-      n: best.n,
-      score: best.score,
-      chroma: best.chroma,
-      skin: best.skin,
-    })
-  }
-
-  if (selected.length < target) {
-    push()
-    return
-  }
-  // Replace weakest non-accent neutral to make room for skin.
-  let worst = -1
-  let worstScore = Infinity
-  for (let i = 0; i < selected.length; i++) {
-    const s = selected[i]
-    if (s.skin > 0.1 || s.chroma >= 45) continue
-    const lum = luminance(s)
-    if (lum < 30 || lum > 235) continue // keep black/white
-    if (s.score < worstScore) {
-      worstScore = s.score
-      worst = i
-    }
-  }
-  if (worst >= 0) {
-    selected[worst] = {
-      r: best.r,
-      g: best.g,
-      b: best.b,
-      n: best.n,
-      score: best.score,
-      chroma: best.chroma,
-      skin: best.skin,
-    }
-  }
-}
-
-function ensureExtreme(
-  bins: HistBin[],
-  selected: Array<Rgb & { n: number; score: number; chroma: number; skin: number }>,
-  target: number,
-  wantBlack: boolean,
-  onAdd?: () => void,
-) {
-  const extreme = bins.find((b) =>
-    wantBlack
-      ? luminance(b) < 28 && b.n > 0
-      : luminance(b) > 232 && chroma(b) < 22 && b.n > 0,
-  )
-  if (!extreme) return
-  if (selected.some((s) => dist2(s, extreme) < 35 * 35)) return
-  if (selected.length >= target) {
-    // Replace weakest neutral midtone.
-    let worst = -1
-    let worstScore = Infinity
-    for (let i = 0; i < selected.length; i++) {
-      const s = selected[i]
-      if (!isNeutral(s)) continue
-      const lum = luminance(s)
-      if (lum < 40 || lum > 220) continue
-      if (s.score < worstScore) {
-        worstScore = s.score
-        worst = i
-      }
-    }
-    if (worst >= 0) {
-      selected[worst] = {
-        r: extreme.r,
-        g: extreme.g,
-        b: extreme.b,
-        n: extreme.n,
-        score: extreme.score,
-        chroma: extreme.chroma,
-        skin: extreme.skin,
-      }
-    }
-    return
-  }
-  selected.push({
-    r: extreme.r,
-    g: extreme.g,
-    b: extreme.b,
-    n: extreme.n,
-    score: extreme.score,
-    chroma: extreme.chroma,
-    skin: extreme.skin,
-  })
-  onAdd?.()
+  // Keep display order = area share (largest first) using pre-refine counts.
+  const order = selected
+    .map((s, i) => ({ i, n: s.n }))
+    .sort((a, b) => b.n - a.n)
+  return order.map((o) => refined[o.i])
 }
 
 function refinePalette(imageData: ImageData, palette: Rgb[], sampleStep: number): Rgb[] {
@@ -347,8 +174,10 @@ function refinePalette(imageData: ImageData, palette: Rgb[], sampleStep: number)
         const d = dist2(pixel, palette[c])
         // Slight bias: keep chromatic pixels from collapsing into neutrals.
         const neutralPenalty =
-          isNeutral(palette[c]) && chroma(pixel) > 40 ? 18 * 18 : 0
-        const dd = d + neutralPenalty
+          isNeutral(palette[c]) && chroma(pixel) > 36 ? 28 * 28 : 0
+        const dullPenalty =
+          chroma(palette[c]) < 30 && chroma(pixel) >= 50 ? 22 * 22 : 0
+        const dd = d + neutralPenalty + dullPenalty
         if (dd < bestD) {
           bestD = dd
           best = c
@@ -363,17 +192,44 @@ function refinePalette(imageData: ImageData, palette: Rgb[], sampleStep: number)
 
   return palette.map((c, i) => {
     if (sums[i].n === 0) return c
-    return {
+    const next = {
       r: Math.round(sums[i].r / sums[i].n),
       g: Math.round(sums[i].g / sums[i].n),
       b: Math.round(sums[i].b / sums[i].n),
     }
+    // Freeze vivid seeds — don't let area-weighted refine mute them.
+    if (chroma(c) >= 55 && chroma(next) < chroma(c) * 0.72) {
+      return c
+    }
+    return next
   })
 }
 
-export function quantizeImage(imageData: ImageData, palette: Rgb[]): Uint16Array {
+export function quantizeImage(
+  imageData: ImageData,
+  palette: Rgb[],
+  opts: { clearBackdrop?: boolean; enamelFillsOnly?: boolean } = {},
+): Uint16Array {
+  const enamelFillsOnly = opts.enamelFillsOnly === true
   const { data, width, height } = imageData
   const labels = new Uint16Array(width * height)
+  // Darkest low-chroma slot = metal wall / outline ink.
+  let blackIdx = 0
+  let blackLum = Infinity
+  let whiteIdx = -1
+  let whiteLum = -1
+  for (let c = 0; c < palette.length; c++) {
+    const L = luminance(palette[c])
+    const ch = chroma(palette[c])
+    if (ch < 40 && L < blackLum) {
+      blackLum = L
+      blackIdx = c
+    }
+    if (ch < 22 && L > whiteLum) {
+      whiteLum = L
+      whiteIdx = c
+    }
+  }
   for (let i = 0; i < width * height; i++) {
     const o = i * 4
     if (data[o + 3] < 128) {
@@ -381,8 +237,29 @@ export function quantizeImage(imageData: ImageData, palette: Rgb[]): Uint16Array
       continue
     }
     const pixel = { r: data[o], g: data[o + 1], b: data[o + 2] }
-    if (isLeftoverBackdrop(pixel)) {
+    // Pre-inked cartoons: black linework belongs on the outline plate.
+    if (enamelFillsOnly && luminance(pixel) <= 34 && chroma(pixel) < 36) {
       labels[i] = 0xffff
+      continue
+    }
+    // Snap paper/foam/apron whites to the white slot.
+    if (
+      whiteIdx >= 0 &&
+      whiteLum > 230 &&
+      luminance(pixel) >= 235 &&
+      chroma(pixel) <= 20
+    ) {
+      labels[i] = whiteIdx
+      continue
+    }
+    // Snap drawn outline ink straight to metal black — stops navy/brown fringes.
+    if (
+      !enamelFillsOnly &&
+      luminance(pixel) <= 32 &&
+      chroma(pixel) < 34 &&
+      blackLum < 45
+    ) {
+      labels[i] = blackIdx
       continue
     }
     let best = 0
@@ -392,6 +269,20 @@ export function quantizeImage(imageData: ImageData, palette: Rgb[]): Uint16Array
       // Keep reds/skin from snapping into nearby grays.
       if (isNeutral(palette[c]) && (chroma(pixel) > 40 || isSkinTone(pixel))) d += 28
       if (isSkinTone(pixel) && !isSkinTone(palette[c]) && chroma(palette[c]) < 35) d += 35
+      // Prefer true white for near-white fills (apron, foam, diamonds).
+      if (
+        luminance(pixel) > 235 &&
+        chroma(pixel) < 20 &&
+        luminance(palette[c]) > 235 &&
+        chroma(palette[c]) < 25
+      ) {
+        d -= 18
+      }
+      // Mid-gray fur / metal must not collapse into near-black metal.
+      if (isMetalGray(pixel)) {
+        if (isMetalGray(palette[c])) d -= 22
+        else if (luminance(palette[c]) < 40 && chroma(palette[c]) < 40) d += 40
+      }
       if (d < bestDist) {
         bestDist = d
         best = c

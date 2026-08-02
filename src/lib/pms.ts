@@ -167,9 +167,17 @@ export function snapPaletteToPms(
     const pmsChroma =
       Math.max(chosen.pms.r, chosen.pms.g, chosen.pms.b) -
       Math.min(chosen.pms.r, chosen.pms.g, chosen.pms.b)
+    const srcLum =
+      0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
+    const pmsLum =
+      0.2126 * chosen.pms.r + 0.7152 * chosen.pms.g + 0.0722 * chosen.pms.b
     // Never mute skin/accent hues into a flat gray PMS swatch.
     const wouldMuteAccent = srcChroma >= 40 && pmsChroma < srcChroma * 0.55
-    const useSource = chosen.deltaE > maxDeltaE || wouldMuteAccent
+    // Keep paper/foam/apron white — don't snap to Cool Gray.
+    const wouldMuteWhite =
+      srcLum >= 240 && srcChroma <= 16 && (pmsLum < 230 || pmsChroma > 20)
+    const useSource =
+      chosen.deltaE > maxDeltaE || wouldMuteAccent || wouldMuteWhite
 
     out[index] = {
       rgb: useSource

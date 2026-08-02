@@ -63,12 +63,14 @@ export function smoothLabelBoundaries(
 /**
  * Drop tiny islands that become speck paths in the SVG.
  * Transparent (0xffff) is never reassigned.
+ * Optional palette keeps high-chroma accents (eyes, lips, flowers).
  */
 export function dropSpeckIslands(
   labels: Uint16Array,
   width: number,
   height: number,
   minArea: number,
+  palette?: Array<{ r: number; g: number; b: number }>,
 ): Uint16Array {
   const seen = new Uint8Array(width * height)
   const out = new Uint16Array(labels)
@@ -110,6 +112,12 @@ export function dropSpeckIslands(
 
     if (comp.length >= minArea) continue
 
+    if (palette && color < palette.length) {
+      const p = palette[color]
+      const ch = Math.max(p.r, p.g, p.b) - Math.min(p.r, p.g, p.b)
+      if (ch >= 40 && comp.length >= 3) continue
+    }
+
     let replace = 0xffff
     let best = -1
     for (const [label, votes] of borderVotes) {
@@ -133,7 +141,9 @@ export function overlapAdjacentFills(
   labels: Uint16Array,
   width: number,
   height: number,
+  opts: { minVotes?: number } = {},
 ): Uint16Array {
+  const minVotes = Math.max(1, opts.minVotes ?? 2)
   const out = new Uint16Array(labels)
   const claims = new Map<number, Map<number, number>>() // pixel → color → votes
 
@@ -179,8 +189,7 @@ export function overlapAdjacentFills(
         best = color
       }
     }
-    // Only rewrite when a neighbor color claims with ≥2 sides (shared edge).
-    if (best !== current && bestCount >= 2) out[i] = best
+    if (best !== current && bestCount >= minVotes) out[i] = best
   }
 
   return out

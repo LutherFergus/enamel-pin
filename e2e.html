@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>e2e pipeline</title></head>
+  <body>
+    <pre id="log">loading…</pre>
+    <script type="module">
+      import { extractOutlinePng, DEFAULT_OUTLINE_SETTINGS } from '/src/lib/outline.ts'
+      import { vectorizeColors, DEFAULT_COLOR_VECTOR_SETTINGS } from '/src/lib/colorVectorize.ts'
+
+      const log = (m) => { document.getElementById('log').textContent = m }
+      window.__run = async (pngB64) => {
+        log('decoding…')
+        const img = new Image()
+        img.src = 'data:image/png;base64,' + pngB64
+        await img.decode()
+        const bmp = await createImageBitmap(img)
+
+        log('outline…')
+        const outline = await extractOutlinePng(
+          bmp,
+          { ...DEFAULT_OUTLINE_SETTINGS, maxDim: 1800 },
+          { enabled: false, tolerance: 42 },
+        )
+
+        log('vector…')
+        const vector = await vectorizeColors(
+          bmp,
+          {
+            ...DEFAULT_COLOR_VECTOR_SETTINGS,
+            maxDim: 1652,
+            colorCount: 14,
+            smoothness: 3,
+            detailRetention: 100,
+            snapToPms: false,
+          },
+          [],
+          {},
+          { enabled: false },
+          [],
+        )
+
+        log('done')
+        return {
+          outlineSvg: outline.svg,
+          vectorSvg: vector.svg,
+          outlinePaths: outline.pathCount,
+          vectorPaths: vector.regionCount,
+          ow: outline.widthPx,
+          oh: outline.heightPx,
+          vw: vector.widthPx,
+          vh: vector.heightPx,
+        }
+      }
+      log('ready')
+    </script>
+  </body>
+</html>

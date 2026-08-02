@@ -13,7 +13,7 @@ function retentionFromMinRegionRatio(minRegionRatio: number): number {
   return Math.round(Math.max(0, Math.min(100, t * 100)))
 }
 
-const STORAGE_KEY = 'enamel-pin-creator.settings.v3'
+const STORAGE_KEY = 'enamel-pin-creator.settings.v7'
 
 export type RememberedSettings = {
   savedAt: string
@@ -49,8 +49,11 @@ export function sanitizeSettings(raw: unknown): DualOutputSettings {
     if (typeof o.outline.invert === 'boolean') {
       base.outline.invert = o.outline.invert
     }
+    if (typeof o.outline.outlineNeutrals === 'boolean') {
+      base.outline.outlineNeutrals = o.outline.outlineNeutrals
+    }
     if (isFiniteNumber(o.outline.maxDim)) {
-      base.outline.maxDim = Math.max(200, Math.min(2000, o.outline.maxDim))
+      base.outline.maxDim = Math.max(200, Math.min(2400, o.outline.maxDim))
     }
   }
 
@@ -77,7 +80,7 @@ export function sanitizeSettings(raw: unknown): DualOutputSettings {
       base.vector.smoothness = Math.max(0, Math.min(5, Math.round(o.vector.smoothness)))
     }
     if (isFiniteNumber(o.vector.maxDim)) {
-      base.vector.maxDim = Math.max(200, Math.min(2000, o.vector.maxDim))
+      base.vector.maxDim = Math.max(200, Math.min(2400, o.vector.maxDim))
     }
     if (typeof o.vector.snapToPms === 'boolean') {
       base.vector.snapToPms = o.vector.snapToPms
@@ -88,6 +91,37 @@ export function sanitizeSettings(raw: unknown): DualOutputSettings {
         Math.min(30, Math.round(o.vector.pmsTolerance)),
       )
     }
+    if (isFiniteNumber(o.vector.minFillMm)) {
+      base.vector.minFillMm =
+        Math.round(Math.max(0.3, Math.min(1.2, o.vector.minFillMm)) * 100) / 100
+    }
+    if (isFiniteNumber(o.vector.pinWidthMm)) {
+      base.vector.pinWidthMm = Math.max(15, Math.min(80, Math.round(o.vector.pinWidthMm)))
+    }
+  }
+
+  if (o.match && typeof o.match === 'object') {
+    if (typeof o.match.enabled === 'boolean') {
+      base.match.enabled = o.match.enabled
+    }
+    if (isFiniteNumber(o.match.oursOpacity)) {
+      base.match.oursOpacity = Math.max(0, Math.min(100, Math.round(o.match.oursOpacity)))
+    }
+    if (isFiniteNumber(o.match.refOpacity)) {
+      base.match.refOpacity = Math.max(0, Math.min(100, Math.round(o.match.refOpacity)))
+    }
+    if (isFiniteNumber(o.match.offsetX)) {
+      base.match.offsetX = Math.max(-50, Math.min(50, Math.round(o.match.offsetX * 10) / 10))
+    }
+    if (isFiniteNumber(o.match.offsetY)) {
+      base.match.offsetY = Math.max(-50, Math.min(50, Math.round(o.match.offsetY * 10) / 10))
+    }
+    if (isFiniteNumber(o.match.scalePct)) {
+      base.match.scalePct = Math.max(50, Math.min(150, Math.round(o.match.scalePct)))
+    }
+    if (typeof o.match.difference === 'boolean') {
+      base.match.difference = o.match.difference
+    }
   }
 
   return base
@@ -97,6 +131,9 @@ export function loadRememberedSettings(): RememberedSettings | null {
   try {
     const raw =
       localStorage.getItem(STORAGE_KEY) ??
+      localStorage.getItem('enamel-pin-creator.settings.v6') ??
+      localStorage.getItem('enamel-pin-creator.settings.v5') ??
+      localStorage.getItem('enamel-pin-creator.settings.v4') ??
       localStorage.getItem('enamel-pin-creator.settings.v1')
     if (!raw) return null
     const parsed = JSON.parse(raw) as { savedAt?: string; settings?: unknown }

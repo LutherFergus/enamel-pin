@@ -1,0 +1,215 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>micro-match potrace</title>
+  </head>
+  <body>
+    <script type="module">
+      import { init, potrace } from '/node_modules/esm-potrace-wasm/dist/index.js'
+
+      function parsePotraceTransform(attrs) {
+        const tr = attrs.match(
+          /translate\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)\s*scale\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\)/i,
+        )
+        if (!tr) return null
+        return {
+          translateY: Number(tr[2]),
+          scale: Math.abs(Number(tr[3])),
+          superScale: 1,
+        }
+      }
+
+      function mapPoint(p, t) {
+        return {
+          x: (p.x * t.scale) / t.superScale,
+          y: (t.translateY + p.y * -t.scale) / t.superScale,
+        }
+      }
+
+      function fmt(n) {
+        const r = Math.round(n * 1000) / 1000
+        return Object.is(r, -0) ? '0' : String(r)
+      }
+
+      function bakePotracePathD(d, t) {
+        const tokens = d.match(/[a-zA-Z]|-?\d*\.?\d+(?:e[-+]?\d+)?/g)
+        if (!tokens?.length) return ''
+        let i = 0
+        let cmd = ''
+        let cx = 0
+        let cy = 0
+        let startX = 0
+        let startY = 0
+        const out = []
+        const nextNum = () => {
+          const v = Number(tokens[i++])
+          return Number.isFinite(v) ? v : 0
+        }
+        while (i < tokens.length) {
+          const tok = tokens[i]
+          if (/^[a-zA-Z]$/.test(tok)) {
+            cmd = tok
+            i++
+          } else if (!cmd) break
+          switch (cmd) {
+            case 'M': {
+              cx = nextNum()
+              cy = nextNum()
+              startX = cx
+              startY = cy
+              const p = mapPoint({ x: cx, y: cy }, t)
+              out.push(`M${fmt(p.x)},${fmt(p.y)}`)
+              cmd = 'L'
+              break
+            }
+            case 'm': {
+              cx += nextNum()
+              cy += nextNum()
+              startX = cx
+              startY = cy
+              const p = mapPoint({ x: cx, y: cy }, t)
+              out.push(`M${fmt(p.x)},${fmt(p.y)}`)
+              cmd = 'l'
+              break
+            }
+            case 'L':
+            case 'l': {
+              if (cmd === 'L') {
+                cx = nextNum()
+                cy = nextNum()
+              } else {
+                cx += nextNum()
+                cy += nextNum()
+              }
+              const p = mapPoint({ x: cx, y: cy }, t)
+              out.push(`L${fmt(p.x)},${fmt(p.y)}`)
+              break
+            }
+            case 'H':
+            case 'h': {
+              cx = cmd === 'H' ? nextNum() : cx + nextNum()
+              const p = mapPoint({ x: cx, y: cy }, t)
+              out.push(`L${fmt(p.x)},${fmt(p.y)}`)
+              break
+            }
+            case 'V':
+            case 'v': {
+              cy = cmd === 'V' ? nextNum() : cy + nextNum()
+              const p = mapPoint({ x: cx, y: cy }, t)
+              out.push(`L${fmt(p.x)},${fmt(p.y)}`)
+              break
+            }
+            case 'C': {
+              const x1 = nextNum()
+              const y1 = nextNum()
+              const x2 = nextNum()
+              const y2 = nextNum()
+              cx = nextNum()
+              cy = nextNum()
+              const p1 = mapPoint({ x: x1, y: y1 }, t)
+              const p2 = mapPoint({ x: x2, y: y2 }, t)
+              const p = mapPoint({ x: cx, y: cy }, t)
+              out.push(
+                `C${fmt(p1.x)},${fmt(p1.y)} ${fmt(p2.x)},${fmt(p2.y)} ${fmt(p.x)},${fmt(p.y)}`,
+              )
+              break
+            }
+            case 'c': {
+              const x1 = cx + nextNum()
+              const y1 = cy + nextNum()
+              const x2 = cx + nextNum()
+              const y2 = cy + nextNum()
+              cx += nextNum()
+              cy += nextNum()
+              const p1 = mapPoint({ x: x1, y: y1 }, t)
+              const p2 = mapPoint({ x: x2, y: y2 }, t)
+              const p = mapPoint({ x: cx, y: cy }, t)
+              out.push(
+                `C${fmt(p1.x)},${fmt(p1.y)} ${fmt(p2.x)},${fmt(p2.y)} ${fmt(p.x)},${fmt(p.y)}`,
+              )
+              break
+            }
+            case 'Z':
+            case 'z': {
+              out.push('Z')
+              cx = startX
+              cy = startY
+              break
+            }
+            default:
+              return out.join('')
+          }
+        }
+        return out.join('')
+      }
+
+      function bakeOutlineSvg(traced, artW, artH, superScale) {
+        const gMatch = traced.match(/<g\b([^>]*)>/i)
+        const transform = gMatch ? parsePotraceTransform(gMatch[1]) : null
+        const ds = [...traced.matchAll(/\bd="([^"]*)"/gi)].map((m) => m[1])
+        if (!ds.length || !transform) return traced
+        const t = { ...transform, superScale }
+        const compound = ds.map((d) => bakePotracePathD(d, t)).filter(Boolean).join('')
+        return [
+          `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${artW} ${artH}" width="${artW}" height="${artH}" shape-rendering="geometricPrecision">`,
+          `<!-- absolute cubics -->`,
+          `<g id="outline" fill="#000000">`,
+          `<path fill="#000000" d="${compound}" />`,
+          `</g></svg>`,
+        ].join('\n')
+      }
+
+      window.__ready = init()
+      window.__traceOutline = async (pngB64, artSize) => {
+        await window.__ready
+        const img = new Image()
+        img.src = 'data:image/png;base64,' + pngB64
+        await img.decode()
+
+        const w = artSize
+        const h = artSize
+
+        // Draw source into art canvas, threshold to ink
+        const src = document.createElement('canvas')
+        src.width = w
+        src.height = h
+        const sctx = src.getContext('2d')
+        sctx.fillStyle = '#fff'
+        sctx.fillRect(0, 0, w, h)
+        sctx.drawImage(img, 0, 0, w, h)
+        const srcData = sctx.getImageData(0, 0, w, h)
+
+        // Native-res Potrace — matches imaengine micro curves.
+        const bw = new ImageData(w, h)
+        for (let i = 0; i < w * h; i++) {
+          const o = i * 4
+          const lum =
+            0.2126 * srcData.data[o] +
+            0.7152 * srcData.data[o + 1] +
+            0.0722 * srcData.data[o + 2]
+          const on = lum < 140
+          const v = on ? 0 : 255
+          bw.data[o] = v
+          bw.data[o + 1] = v
+          bw.data[o + 2] = v
+          bw.data[o + 3] = 255
+        }
+
+        const turdsize = Math.max(2, Math.round(w * h * 0.000002))
+        const traced = await potrace(bw, {
+          turdsize,
+          turnpolicy: 4,
+          alphamax: 1.0,
+          opticurve: 1,
+          opttolerance: 0.2,
+          pathonly: false,
+          extractcolors: false,
+        })
+        return bakeOutlineSvg(String(traced), w, h, 1)
+      }
+
+      document.body.textContent = 'ready'
+    </script>
+  </body>
+</html>

@@ -1,5 +1,6 @@
 import { init as initPotrace, potrace } from 'esm-potrace-wasm'
 import ImageTracer from 'imagetracerjs'
+import { bakeColorPaths } from './potraceBake'
 import type { PaletteColor, Rgb } from './types'
 import { rgbToHex } from './types'
 
@@ -53,29 +54,27 @@ export function labelsToSmoothSvg(
 ): { svg: string; pathCount: number } {
   const { widthPx: w, heightPx: h, smoothness } = opts
   const t = Math.max(0, Math.min(5, smoothness)) / 5
-  const pathomitScale = Math.max(0.25, Math.min(1.5, opts.pathomitScale ?? 1))
+  const pathomitScale = Math.max(0.25, Math.min(1.75, opts.pathomitScale ?? 1))
 
-  // 2×–3× supersample: pixel stairs become sub-pixel to the fitter.
-  const superScale = smoothness >= 4 ? 3 : smoothness >= 2 ? 2 : 1
+  // Always ≥2× supersample so zoomed edges aren't 1px stairs; 3× at high smooth.
+  const superScale = smoothness >= 3 ? 3 : 2
 
   const flat = renderFlat(labels, fillRgb, w, h)
-  const imgd =
-    superScale === 1 ? flat : nearestNeighborScale(flat, w, h, superScale)
+  const imgd = nearestNeighborScale(flat, w, h, superScale)
 
   const pal = [
     ...fillRgb.map((c) => ({ r: c.r, g: c.g, b: c.b, a: 255 })),
     { r: 0, g: 0, b: 0, a: 0 },
   ]
 
-  // Aggressive tolerances → prefer long smooth arcs over pixel dogbones.
-  // (Vectorizer.AI-style: geometry first, not edge-pixel fidelity.)
-  const ltres = 1.2 + t * 7.5
-  const qtres = 1.2 + t * 7.5
+  // Micro curve fit: slightly higher tolerances → longer arcs, fewer dogbones.
+  const ltres = 1.8 + t * 7.2
+  const qtres = 1.8 + t * 7.2
   const pathomit = Math.max(
     2,
     Math.round((8 + t * 28) * superScale * pathomitScale),
   )
-  const blurradius = t >= 0.35 ? Math.min(3, 1 + Math.round(t * 2)) : 0
+  const blurradius = t >= 0.25 ? Math.min(3, 1 + Math.round(t * 2)) : 0
 
   const traced = ImageTracer.imagedataToTracedata(imgd, {
     pal,
@@ -91,7 +90,8 @@ export function labelsToSmoothSvg(
     strokewidth: 0,
     // Raw tracedata stays in supersampled px; we scale in segmentPath.
     scale: 1,
-    roundcoords: 2,
+    // Finer control-point quantization — less micro-stair on zoom.
+    roundcoords: 3,
     viewbox: true,
     desc: false,
     blurradius,
@@ -182,18 +182,33 @@ export function labelsToSmoothSvg(
   return { svg: parts.join('\n'), pathCount: pending.length }
 }
 
+export type CrispTraceOptions = {
+  widthPx: number
+  heightPx: number
+  smoothness?: number
+  /** Grow each color mask by this many px before Potrace (seals abutments). */
+  seamDilate?: number
+  /** Matching fill stroke width in art px (0 = none). Traps hairlines under outline. */
+  seamStroke?: number
+  /** Skip majority pepper clean (Final already cleaned labels). */
+  skipMajorityClean?: boolean
+}
+
 /**
- * Potrace each flat color into smooth cubic Beziers — used for Final / Clean up
- * so enamel edges read as crisp curves instead of ImageTracer stair-waves.
+ * Potrace each flat color into imaengine-style absolute cubic Beziers.
+ * Masks are dilated so fills abut; optional stroke traps remaining hairlines.
  */
 export async function labelsToCrispSvg(
   labels: Uint16Array,
   fillRgb: Rgb[],
   metaByIndex: Map<number, PaletteColor>,
-  opts: { widthPx: number; heightPx: number },
+  opts: CrispTraceOptions,
 ): Promise<{ svg: string; pathCount: number }> {
   await ensurePotrace()
   const { widthPx: w, heightPx: h } = opts
+  const t = Math.max(0, Math.min(5, opts.smoothness ?? 3)) / 5
+  const seamDilate = Math.max(0, Math.min(6, Math.round(opts.seamDilate ?? 1)))
+  const seamStroke = Math.max(0, opts.seamStroke ?? 0)
   const n = w * h
 
   const used = new Set<number>()
@@ -213,13 +228,20 @@ export async function labelsToCrispSvg(
 
   const parts: string[] = [
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" shape-rendering="geometricPrecision">`,
-    `<!-- crisp enamel fills · Potrace curves · PMS Solid Coated\n${legend}\n-->`,
+    `<!-- enamel fills · absolute Potrace cubics · PMS Solid Coated\n${legend}\n-->`,
     '<g id="fills">',
   ]
 
-  type Pending = { markup: string; area: number }
+  type Pending = { markup: string; area: number; pathCount: number }
   const pending: Pending[] = []
-  const turdsize = Math.max(4, Math.round(w * h * 0.000012))
+  // Native-res Potrace + near-default curve fit (imaengine micro match).
+  // UI smoothness only nudges turdsize / corner threshold slightly.
+  const turdsize = Math.max(2, Math.round(w * h * (0.000003 - t * 0.000001)))
+  const alphamax = 0.92 + t * 0.08
+  const opttolerance = 0.18 + (1 - t) * 0.08
+
+  // Kill 1px boundary pepper so Potrace fits long cubics (not pixel stairs).
+  const cleaned = opts.skipMajorityClean ? labels : majorityLabels(labels, w, h)
 
   for (const idx of [...used].sort((a, b) => a - b)) {
     const c = fillRgb[idx]
@@ -228,110 +250,122 @@ export async function labelsToCrispSvg(
     const meta = metaByIndex.get(idx)
     const pmsAttr = meta?.pmsCode ? ` data-pms="${meta.pmsCode}"` : ''
 
-    // 2× supersample so Potrace fits curves to sub-pixel stairs.
-    const scale = 2
-    const tw = w * scale
-    const th = h * scale
-    const bw = new ImageData(tw, th)
-    for (let y = 0; y < th; y++) {
-      const sy = (y / scale) | 0
-      for (let x = 0; x < tw; x++) {
-        const sx = (x / scale) | 0
-        const on = labels[sy * w + sx] === idx
-        const o = (y * tw + x) * 4
-        const v = on ? 0 : 255
-        bw.data[o] = v
-        bw.data[o + 1] = v
-        bw.data[o + 2] = v
-        bw.data[o + 3] = 255
-      }
+    // Per-color binary dilate grows into neighboring colors AND clear — true
+    // trap overlap (label-field dilate only filled transparent holes).
+    let mask = new Uint8Array(n)
+    for (let i = 0; i < n; i++) {
+      if (cleaned[i] === idx) mask[i] = 255
+    }
+    if (seamDilate > 0) mask = dilateBinary(mask, w, h, seamDilate)
+
+    const bw = new ImageData(w, h)
+    for (let i = 0; i < n; i++) {
+      const on = mask[i] !== 0
+      const o = i * 4
+      const v = on ? 0 : 255
+      bw.data[o] = v
+      bw.data[o + 1] = v
+      bw.data[o + 2] = v
+      bw.data[o + 3] = 255
     }
 
     const traced = await potrace(bw, {
-      turdsize: Math.max(4, turdsize * scale * scale),
+      turdsize,
       turnpolicy: 4,
-      alphamax: 1.0,
+      alphamax,
       opticurve: 1,
-      opttolerance: 0.42,
+      opttolerance,
       pathonly: false,
       extractcolors: false,
     })
 
-    const inner = extractPotraceColorGroup(String(traced), fill, pmsAttr)
-    if (!inner.markup) continue
-
-    // Outer scale maps 2× Potrace space back into the art viewBox.
+    const baked = bakeColorPaths(String(traced), 1, fill, pmsAttr, seamStroke)
+    if (!baked.markup) continue
     pending.push({
-      markup: `<g transform="scale(${1 / scale})">${inner.markup}</g>`,
-      area: inner.area / (scale * scale),
+      markup: baked.markup,
+      area: baked.area,
+      pathCount: baked.pathCount,
     })
   }
 
   pending.sort((a, b) => b.area - a.area)
-  for (const p of pending) parts.push(p.markup)
+  let pathCount = 0
+  for (const p of pending) {
+    parts.push(p.markup)
+    pathCount += p.pathCount
+  }
 
   parts.push('</g></svg>')
-  return { svg: parts.join('\n'), pathCount: pending.length }
+  return { svg: parts.join('\n'), pathCount }
 }
 
-/** Recolor Potrace paths; keep the native y-flip transform untouched. */
-function extractPotraceColorGroup(
-  svg: string,
-  fill: string,
-  pmsAttr: string,
-): { markup: string; area: number } {
-  const s = svg
-    .replace(/<\?xml[^>]*>/i, '')
-    .replace(/<!DOCTYPE[^>]*>/i, '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<rect\b[^>]*\/?>/gi, '')
-    .trim()
-
-  const gMatch =
-    s.match(/<g\b([^>]*)>([\s\S]*)<\/g>\s*<\/svg>/i) ||
-    s.match(/<g\b([^>]*)>([\s\S]*)<\/g>/i)
-  if (!gMatch) return { markup: '', area: 0 }
-
-  const gAttrs = gMatch[1]
-  const body = gMatch[2]
-  const transform = gAttrs.match(/transform="([^"]*)"/i)?.[1]
-
-  const paths = [...body.matchAll(/<path\b[^>]*\/?>/gi)].map((m) => m[0])
-  if (!paths.length) return { markup: '', area: 0 }
-
-  const seam = 2.4 // in supersampled px; halved by outer scale(0.5)
-  const restyled = paths
-    .map((p) => {
-      const open = p
-        .replace(/\sfill="[^"]*"/gi, '')
-        .replace(/\sstroke="[^"]*"/gi, '')
-        .replace(/\sfill-rule="[^"]*"/gi, '')
-        .replace(/\s?\/?>$/, '')
-      return `${open} fill="${fill}" fill-rule="evenodd" stroke="${fill}" stroke-width="${seam.toFixed(2)}" stroke-linejoin="round" stroke-linecap="round" paint-order="stroke fill"${pmsAttr} />`
-    })
-    .join('\n')
-
-  let area = 0
-  for (const m of body.matchAll(/\bd="([^"]*)"/gi)) {
-    const nums = m[1].match(/-?\d+\.?\d*/g)
-    if (!nums || nums.length < 4) continue
-    const xs: number[] = []
-    const ys: number[] = []
-    for (let i = 0; i + 1 < nums.length; i += 2) {
-      xs.push(Number(nums[i]))
-      ys.push(Number(nums[i + 1]))
+/** 3×3 majority vote — removes single-pixel pepper before curve fitting. */
+function majorityLabels(labels: Uint16Array, w: number, h: number): Uint16Array {
+  const out = new Uint16Array(labels)
+  const counts = new Map<number, number>()
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x
+      const center = labels[i]
+      if (center === 0xffff) continue
+      counts.clear()
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const v = labels[(y + dy) * w + (x + dx)]
+          if (v === 0xffff) continue
+          counts.set(v, (counts.get(v) ?? 0) + 1)
+        }
+      }
+      let best = center
+      let bestN = -1
+      for (const [v, n] of counts) {
+        if (n > bestN || (n === bestN && v === center)) {
+          bestN = n
+          best = v
+        }
+      }
+      out[i] = best
     }
-    if (!xs.length) continue
-    area +=
-      Math.max(0, Math.max(...xs) - Math.min(...xs)) *
-      Math.max(0, Math.max(...ys) - Math.min(...ys))
   }
+  return out
+}
 
-  const transformAttr = transform ? ` transform="${transform}"` : ''
-  return {
-    markup: `<g${transformAttr} fill="${fill}">${restyled}</g>`,
-    area: area || paths.length,
+/** Morphological dilate of a binary mask (grows into any off pixel). */
+function dilateBinary(
+  mask: Uint8Array,
+  w: number,
+  h: number,
+  radius: number,
+): Uint8Array {
+  const r = Math.max(1, Math.round(radius))
+  let cur = mask
+  for (let pass = 0; pass < r; pass++) {
+    const next = new Uint8Array(cur)
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x
+        if (cur[i]) continue
+        let grow = false
+        for (const [dx, dy] of [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+        ] as const) {
+          const nx = x + dx
+          const ny = y + dy
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+          if (cur[ny * w + nx]) {
+            grow = true
+            break
+          }
+        }
+        if (grow) next[i] = 255
+      }
+    }
+    cur = next
   }
+  return cur
 }
 
 function renderFlat(

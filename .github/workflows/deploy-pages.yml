@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main, cursor/enamel-pin-vectorizer-9eab]
+    branches: [main, cursor/vectors-9eab]
   workflow_dispatch:
 
 permissions:

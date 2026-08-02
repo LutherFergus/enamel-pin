@@ -1,6 +1,6 @@
 /**
- * Combine color-vector fills + black outline die-lines into one Proof SVG.
- * Vector sits underneath; outline (#000000) on top for the metal-wall plate.
+ * Stack fill SVG + black outline die-lines into one Proof SVG.
+ * Used after cell-dominant fills are built (or as a lightweight placeholder).
  */
 
 export type ProofSvg = {

@@ -7,11 +7,9 @@ import { PmsChartModal } from './components/PmsChartModal'
 import { Preview, type PreviewTab } from './components/Preview'
 import { SaveScreenshotButton } from './components/SaveScreenshotButton'
 import { generateAiImage, type PinheadsTheme } from './lib/aiGenerate'
-import { cleanupProofDominantCells } from './lib/cleanupProof'
-import {
-  detailRetentionParams,
-  type PmsOverrides,
-} from './lib/colorVectorize'
+import { type PmsOverrides } from './lib/colorVectorize'
+import { exportTabLayers } from './lib/exportLayers'
+import { sourceImageToSvg } from './lib/originalSvg'
 import {
   createDualOutputs,
   DEFAULT_DUAL_SETTINGS,
@@ -21,6 +19,7 @@ import {
   type DualOutputSettings,
 } from './lib/pipeline'
 import { getPmsChartSize } from './lib/pms'
+import type { MatchReferences } from './lib/matchOverlay'
 import {
   forgetRememberedSettings,
   initialSettings,
@@ -65,13 +64,68 @@ export default function App() {
   const [viewMode, setViewMode] = useState<PreviewTab>('source')
   const [isPending, startTransition] = useTransition()
   const [busy, setBusy] = useState(false)
+  const [matchRefs, setMatchRefs] = useState<MatchReferences>({
+    outlineUrl: null,
+    outlineName: null,
+    vectorUrl: null,
+    vectorName: null,
+  })
 
   useEffect(() => {
     return () => {
       if (sourceUrl) URL.revokeObjectURL(sourceUrl)
       revokeDualUrls(result)
+      if (matchRefs.outlineUrl) URL.revokeObjectURL(matchRefs.outlineUrl)
+      if (matchRefs.vectorUrl) URL.revokeObjectURL(matchRefs.vectorUrl)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- unmount cleanup only
+  }, [])
+
+  const onMatchOutlineFile = useCallback((file: File | null) => {
+    setMatchRefs((prev) => {
+      if (prev.outlineUrl) URL.revokeObjectURL(prev.outlineUrl)
+      if (!file) {
+        return { ...prev, outlineUrl: null, outlineName: null }
+      }
+      return {
+        ...prev,
+        outlineUrl: URL.createObjectURL(file),
+        outlineName: file.name,
+      }
+    })
+    // Auto-enable overlay when a reference is dropped.
+    if (file) {
+      setSettings((s) => {
+        const next = { ...s, match: { ...s.match, enabled: true } }
+        const saved = rememberSettings(next)
+        setSavedLabel(formatSavedAt(saved.savedAt))
+        return next
+      })
+      setViewMode('outline')
+    }
+  }, [])
+
+  const onMatchVectorFile = useCallback((file: File | null) => {
+    setMatchRefs((prev) => {
+      if (prev.vectorUrl) URL.revokeObjectURL(prev.vectorUrl)
+      if (!file) {
+        return { ...prev, vectorUrl: null, vectorName: null }
+      }
+      return {
+        ...prev,
+        vectorUrl: URL.createObjectURL(file),
+        vectorName: file.name,
+      }
+    })
+    if (file) {
+      setSettings((s) => {
+        const next = { ...s, match: { ...s.match, enabled: true } }
+        const saved = rememberSettings(next)
+        setSavedLabel(formatSavedAt(saved.savedAt))
+        return next
+      })
+      setViewMode('vector')
+    }
   }, [])
 
   const onSettingsChange = useCallback((next: DualOutputSettings) => {
@@ -229,42 +283,6 @@ export default function App() {
     void runPipeline(sourceImage, settings, [], {}, { preserveView: true }, [])
   }, [runPipeline, settings, sourceImage])
 
-  const onCleanup = useCallback(async () => {
-    if (!result || result.vectorPending || result.vector.palette.length === 0) {
-      return
-    }
-    setBusy(true)
-    setError(null)
-    try {
-      const { pathomitScale } = detailRetentionParams(
-        settings.vector.detailRetention,
-      )
-      const cleaned = await cleanupProofDominantCells(result.proof, result.outline, {
-        smoothness: settings.vector.smoothness,
-        pathomitScale,
-        palette: result.vector.palette,
-        maxDim: Math.max(result.outline.widthPx, result.vector.widthPx),
-      })
-      // Cleaned fills blob is only needed inside the final proof SVG.
-      // (vector download stays the pre-cleanup plate.)
-      startTransition(() => {
-        setResult((prev) => {
-          if (!prev) return prev
-          if (prev.final) URL.revokeObjectURL(prev.final.svgUrl)
-          return {
-            ...prev,
-            final: cleaned.proof,
-          }
-        })
-        setViewMode('final')
-      })
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Clean up failed')
-    } finally {
-      setBusy(false)
-    }
-  }, [result, settings])
-
   const onMergesChange = useCallback(
     async (nextMerges: Array<[number, number]>) => {
       setMerges(nextMerges)
@@ -298,11 +316,6 @@ export default function App() {
     setSavedLabel(formatSavedAt(saved.savedAt))
   }, [])
 
-  const downloadOutline = useCallback(() => {
-    if (!result) return
-    downloadBlob(result.outline.pngBlob, `${sourceName}-outline.png`)
-  }, [result, sourceName])
-
   const downloadOutlineSvg = useCallback(() => {
     if (!result) return
     downloadBlob(result.outline.svgBlob, `${sourceName}-outline.svg`)
@@ -313,15 +326,44 @@ export default function App() {
     downloadBlob(result.vector.svgBlob, `${sourceName}-vector.svg`)
   }, [result, sourceName])
 
+  const [originalSvgBusy, setOriginalSvgBusy] = useState(false)
+  const downloadOriginalSvg = useCallback(async () => {
+    if (!sourceUrl) return
+    setOriginalSvgBusy(true)
+    setError(null)
+    try {
+      const blob = await sourceImageToSvg(sourceUrl, 2000)
+      downloadBlob(blob, `${sourceName}-original.svg`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Original SVG export failed')
+    } finally {
+      setOriginalSvgBusy(false)
+    }
+  }, [sourceName, sourceUrl])
+
   const downloadProof = useCallback(() => {
     if (!result) return
     downloadBlob(result.proof.svgBlob, `${sourceName}-proof.svg`)
   }, [result, sourceName])
 
-  const downloadFinal = useCallback(() => {
-    if (!result?.final) return
-    downloadBlob(result.final.svgBlob, `${sourceName}-final.svg`)
-  }, [result, sourceName])
+  const [layerExportBusy, setLayerExportBusy] = useState(false)
+
+  const downloadLayers = useCallback(async () => {
+    if (!result || result.vectorPending) return
+    setLayerExportBusy(true)
+    setError(null)
+    try {
+      const blob = await exportTabLayers(
+        { sourceUrl, result, maxDim: 2000 },
+        'psd',
+      )
+      downloadBlob(blob, `${sourceName}-layers.psd`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Layer export failed')
+    } finally {
+      setLayerExportBusy(false)
+    }
+  }, [result, sourceName, sourceUrl])
 
   const statusText = useMemo(() => {
     if (error) return error
@@ -332,25 +374,36 @@ export default function App() {
       return 'Working…'
     }
     if (!result) return 'Upload an image or generate one with AI'
+    const matchOn = settings.match.enabled
+    const matchHint =
+      matchOn &&
+      ((viewMode === 'outline' && matchRefs.outlineUrl) ||
+        (viewMode === 'vector' && matchRefs.vectorUrl) ||
+        (viewMode === 'proof' && (matchRefs.outlineUrl || matchRefs.vectorUrl)))
+        ? ' · overlay match on'
+        : ''
     if (viewMode === 'source') return 'Original artwork'
     if (viewMode === 'outline') {
-      return `Outline SVG · ${result.outline.widthPx}×${result.outline.heightPx} · ${result.outline.pathCount} paths · #000000`
+      return `Outline SVG · ${result.outline.widthPx}×${result.outline.heightPx} · ${result.outline.pathCount} paths · #000000${matchHint}`
     }
     if (result.vectorPending || result.vector.palette.length === 0) {
       return `Outline ready · color vector still running or unavailable`
     }
-    if (viewMode === 'final') {
-      return result.final
-        ? `Final SVG · one dominant color per outline cell`
-        : `Final · hit Clean up to build from the proof`
-    }
     if (viewMode === 'proof') {
-      const pmsCount = result.vector.palette.filter((c) => c.pmsCode).length
-      return `Proof SVG · vector (${result.vector.palette.length} fills / ${pmsCount} PMS) + outline (${result.outline.pathCount} paths)`
+      return `Proof SVG · each outline cell filled with its dominant vector color · ${result.outline.pathCount} paths${matchHint}`
     }
     const pmsCount = result.vector.palette.filter((c) => c.pmsCode).length
-    return `Vector SVG · ${result.vector.palette.length} fills · ${pmsCount} PMS · ${result.vector.regionCount} shapes`
-  }, [busy, error, isPending, result, viewMode])
+    return `Vector SVG · ${result.vector.palette.length} fills · ${pmsCount} PMS · ${result.vector.regionCount} shapes${matchHint}`
+  }, [
+    busy,
+    error,
+    isPending,
+    matchRefs.outlineUrl,
+    matchRefs.vectorUrl,
+    result,
+    settings.match.enabled,
+    viewMode,
+  ])
 
   return (
     <div className="app">
@@ -361,7 +414,8 @@ export default function App() {
         </div>
         <p className="lede">
           Upload or generate artwork for soft enamel pins, then get transparent outline
-          SVG/PNG die-lines, a flat-color vector SVG, and a combined Proof SVG.
+          SVG die-lines, a flat-color vector SVG, and a Proof that fills each
+          outline cell with its dominant vector color.
         </p>
       </header>
 
@@ -399,6 +453,9 @@ export default function App() {
             disabled={busy}
             savedLabel={savedLabel}
             onResetDefaults={onResetDefaults}
+            matchRefs={matchRefs}
+            onMatchOutlineFile={onMatchOutlineFile}
+            onMatchVectorFile={onMatchVectorFile}
           />
 
           <button
@@ -425,18 +482,18 @@ export default function App() {
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={downloadFinal}
-              disabled={!result?.final || busy}
+              onClick={() => void downloadOriginalSvg()}
+              disabled={!sourceUrl || busy || originalSvgBusy}
             >
-              Download final SVG
+              {originalSvgBusy ? 'Exporting original…' : 'Download original SVG'}
             </button>
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={downloadProof}
+              onClick={downloadVector}
               disabled={!result || busy || !!result.vectorPending || result.vector.palette.length === 0}
             >
-              Download proof SVG
+              Download vector SVG
             </button>
             <button
               type="button"
@@ -449,19 +506,29 @@ export default function App() {
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={downloadOutline}
-              disabled={!result}
+              onClick={downloadProof}
+              disabled={!result || busy || !!result.vectorPending || result.vector.palette.length === 0}
             >
-              Download outline PNG
+              Download proof SVG
             </button>
             <button
               type="button"
-              className="btn btn-secondary"
-              onClick={downloadVector}
-              disabled={!result || busy || !!result.vectorPending || result.vector.palette.length === 0}
+              className="btn btn-primary"
+              onClick={() => void downloadLayers()}
+              disabled={
+                !result ||
+                busy ||
+                layerExportBusy ||
+                !!result.vectorPending ||
+                result.vector.palette.length === 0
+              }
             >
-              Download vector SVG
+              {layerExportBusy ? 'Exporting layers…' : 'Download for Sketchbook (PSD)'}
             </button>
+            <p className="hint">
+              For Sketchbook: use the PSD — File → Open. Layers bottom → top:
+              Outline, Vector, Original.
+            </p>
           </div>
         </aside>
 
@@ -501,14 +568,6 @@ export default function App() {
                 >
                   Proof
                 </button>
-                <button
-                  type="button"
-                  className={`tab ${viewMode === 'final' ? 'active' : ''}`}
-                  onClick={() => setViewMode('final')}
-                  disabled={!result || !!result.vectorPending || result.vector.palette.length === 0}
-                >
-                  Final
-                </button>
               </div>
               <div className="preview-actions">
                 <button
@@ -518,20 +577,6 @@ export default function App() {
                   disabled={!sourceImage || busy}
                 >
                   {busy ? 'Processing…' : 'Reprocess'}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary cleanup-btn"
-                  onClick={() => void onCleanup()}
-                  disabled={
-                    !result ||
-                    busy ||
-                    !!result.vectorPending ||
-                    result.vector.palette.length === 0
-                  }
-                  title="Inside each black outline cell, if more than one color is present, fill the cell with the dominant color"
-                >
-                  Clean up
                 </button>
               </div>
             </div>
@@ -543,6 +588,8 @@ export default function App() {
             sourceUrl={sourceUrl}
             result={result}
             busy={busy || isPending}
+            match={settings.match}
+            matchRefs={matchRefs}
           />
         </section>
       </div>

@@ -3,18 +3,63 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react'
+import type {
+  MatchOverlaySettings,
+  MatchReferences,
+} from '../lib/matchOverlay'
 import type { DualOutputResult } from '../lib/pipeline'
 
-export type PreviewTab = 'source' | 'vector' | 'outline' | 'proof' | 'final'
+export type PreviewTab = 'source' | 'vector' | 'outline' | 'proof'
 
 type Props = {
   viewMode: PreviewTab
   sourceUrl: string | null
   result: DualOutputResult | null
   busy: boolean
+  match?: MatchOverlaySettings
+  matchRefs?: MatchReferences
+}
+
+function MatchStack({
+  oursUrl,
+  oursAlt,
+  refUrl,
+  match,
+}: {
+  oursUrl: string
+  oursAlt: string
+  refUrl: string
+  match: MatchOverlaySettings
+}) {
+  const scale = match.scalePct / 100
+  const refStyle: CSSProperties = {
+    opacity: match.refOpacity / 100,
+    transform: `translate(${match.offsetX}%, ${match.offsetY}%) scale(${scale})`,
+  }
+  return (
+    <div
+      className={`match-stack${match.difference ? ' match-stack-diff' : ''}`}
+    >
+      <img
+        className="match-ours"
+        src={oursUrl}
+        alt={oursAlt}
+        draggable={false}
+        style={{ opacity: match.oursOpacity / 100 }}
+      />
+      <img
+        className="match-ref"
+        src={refUrl}
+        alt="Your reference SVG overlay"
+        draggable={false}
+        style={refStyle}
+      />
+    </div>
+  )
 }
 
 const MIN_SCALE = 1
@@ -245,21 +290,25 @@ function ZoomViewport({
   )
 }
 
-export function Preview({ viewMode, sourceUrl, result, busy }: Props) {
+export function Preview({
+  viewMode,
+  sourceUrl,
+  result,
+  busy,
+  match,
+  matchRefs,
+}: Props) {
   const [vectorUrl, setVectorUrl] = useState<string | null>(null)
   const [proofUrl, setProofUrl] = useState<string | null>(null)
-  const [finalUrl, setFinalUrl] = useState<string | null>(null)
 
   useEffect(() => {
     if (!result) {
       setVectorUrl(null)
       setProofUrl(null)
-      setFinalUrl(null)
       return
     }
     setVectorUrl(result.vector.svgUrl)
     setProofUrl(result.proof.svgUrl)
-    setFinalUrl(result.final?.svgUrl ?? null)
   }, [result])
 
   if (!sourceUrl && !result) {
@@ -268,14 +317,19 @@ export function Preview({ viewMode, sourceUrl, result, busy }: Props) {
         <div className="empty-state">
           <h3>Upload or generate</h3>
           <p>
-            You’ll get transparent outline SVG/PNG die-lines, a flat-color
-            vector SVG, and a combined Proof SVG (vector + outline). Use Clean
-            up for a Final SVG with one dominant color per outline cell.
+            You’ll get transparent outline SVG die-lines, a flat-color
+            vector SVG, and a Proof that fills each black-outline cell with
+            its dominant vector color. Under Settings → Match my SVG, overlay
+            your reference Outline/Vector to line up edges.
           </p>
         </div>
       </div>
     )
   }
+
+  const overlayOn = !!match?.enabled
+  const outlineRef = matchRefs?.outlineUrl ?? null
+  const vectorRef = matchRefs?.vectorUrl ?? null
 
   let media: ReactNode = (
     <div className="empty-state">
@@ -289,52 +343,71 @@ export function Preview({ viewMode, sourceUrl, result, busy }: Props) {
     media = <img src={sourceUrl} alt="Original artwork" draggable={false} />
     mediaKey = `source:${sourceUrl}`
   } else if (viewMode === 'vector' && vectorUrl) {
-    media = (
-      <img
-        src={vectorUrl}
-        alt="Color-quantized vector preview"
-        draggable={false}
-      />
-    )
-    mediaKey = `vector:${vectorUrl}`
+    if (overlayOn && match && vectorRef) {
+      media = (
+        <MatchStack
+          oursUrl={vectorUrl}
+          oursAlt="Color-quantized vector preview"
+          refUrl={vectorRef}
+          match={match}
+        />
+      )
+      // Keep key stable across nudge/opacity so zoom doesn’t reset.
+      mediaKey = `vector-match:${vectorUrl}:${vectorRef}`
+    } else {
+      media = (
+        <img
+          src={vectorUrl}
+          alt="Color-quantized vector preview"
+          draggable={false}
+        />
+      )
+      mediaKey = `vector:${vectorUrl}`
+    }
   } else if (viewMode === 'outline' && result) {
-    media = (
-      <img
-        src={result.outline.svgUrl}
-        alt="Stroke outline SVG on transparent background"
-        draggable={false}
-      />
-    )
-    mediaKey = `outline:${result.outline.svgUrl}`
+    if (overlayOn && match && outlineRef) {
+      media = (
+        <MatchStack
+          oursUrl={result.outline.svgUrl}
+          oursAlt="Stroke outline SVG on transparent background"
+          refUrl={outlineRef}
+          match={match}
+        />
+      )
+      mediaKey = `outline-match:${result.outline.svgUrl}:${outlineRef}`
+    } else {
+      media = (
+        <img
+          src={result.outline.svgUrl}
+          alt="Stroke outline SVG on transparent background"
+          draggable={false}
+        />
+      )
+      mediaKey = `outline:${result.outline.svgUrl}`
+    }
   } else if (viewMode === 'proof' && proofUrl) {
-    media = (
-      <img
-        src={proofUrl}
-        alt="Proof SVG — vector fills with outline die-lines"
-        draggable={false}
-      />
-    )
-    mediaKey = `proof:${proofUrl}`
-  } else if (viewMode === 'final' && finalUrl) {
-    media = (
-      <img
-        src={finalUrl}
-        alt="Final SVG — dominant color per outline cell"
-        draggable={false}
-      />
-    )
-    mediaKey = `final:${finalUrl}`
-  } else if (viewMode === 'final') {
-    media = (
-      <div className="empty-state">
-        <h3>Final</h3>
-        <p>
-          Run <strong>Clean up</strong> to fill each black-outline cell with its
-          dominant color. The result appears here.
-        </p>
-      </div>
-    )
-    mediaKey = 'final:empty'
+    // Prefer outline ref on Proof (die-line match); fall back to vector ref.
+    const proofRef = outlineRef ?? vectorRef
+    if (overlayOn && match && proofRef) {
+      media = (
+        <MatchStack
+          oursUrl={proofUrl}
+          oursAlt="Proof SVG — dominant color per outline cell"
+          refUrl={proofRef}
+          match={match}
+        />
+      )
+      mediaKey = `proof-match:${proofUrl}:${proofRef}`
+    } else {
+      media = (
+        <img
+          src={proofUrl}
+          alt="Proof SVG — dominant color per outline cell"
+          draggable={false}
+        />
+      )
+      mediaKey = `proof:${proofUrl}`
+    }
   }
 
   return (

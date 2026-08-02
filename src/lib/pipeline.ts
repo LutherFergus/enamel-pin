@@ -13,6 +13,11 @@ import {
   type OutlineResult,
   type OutlineSettings,
 } from './outline'
+import {
+  DEFAULT_MATCH_OVERLAY,
+  type MatchOverlaySettings,
+} from './matchOverlay'
+import { buildDominantCellProof } from './cellDominantProof'
 import { composeProofSvg, revokeProof, type ProofSvg } from './proofSvg'
 
 export type DualOutputSettings = {
@@ -22,6 +27,8 @@ export type DualOutputSettings = {
   backgroundTolerance: number
   outline: OutlineSettings
   vector: ColorVectorSettings
+  /** Live overlay of your reference Outline/Vector SVGs in the preview. */
+  match: MatchOverlaySettings
 }
 
 export const DEFAULT_DUAL_SETTINGS: DualOutputSettings = {
@@ -29,17 +36,13 @@ export const DEFAULT_DUAL_SETTINGS: DualOutputSettings = {
   backgroundTolerance: 50,
   outline: { ...DEFAULT_OUTLINE_SETTINGS },
   vector: { ...DEFAULT_COLOR_VECTOR_SETTINGS },
+  match: { ...DEFAULT_MATCH_OVERLAY },
 }
 
 export type DualOutputResult = {
   outline: OutlineResult
   vector: ColorVectorResult
   proof: ProofSvg
-  /**
-   * Optional cleaned proof from the Clean up button — dominant color per
-   * outline cell. Does not replace `proof`.
-   */
-  final?: ProofSvg
   /** True until color vector finishes (outline may already be usable). */
   vectorPending?: boolean
 }
@@ -114,10 +117,17 @@ export async function createDualOutputs(
     URL.revokeObjectURL(pendingVector.svgUrl)
     revokeProof(partial.proof)
 
+    await yieldToUi()
+    const proof = await buildDominantCellProof(vector.svg, outline, {
+      smoothness: settings.vector.smoothness,
+      maxDim: Math.max(outline.widthPx, vector.widthPx),
+      palette: vector.palette,
+    })
+
     return {
       outline,
       vector,
-      proof: composeProofSvg(vector.svg, outline.svg),
+      proof,
       vectorPending: false,
     }
   } catch (err) {
@@ -151,11 +161,15 @@ export async function remergeVector(
     disabledColors,
   )
   revokeProof(previous.proof)
-  revokeProof(previous.final)
+  const proof = await buildDominantCellProof(vector.svg, previous.outline, {
+    smoothness,
+    maxDim: Math.max(previous.outline.widthPx, vector.widthPx),
+    palette: vector.palette,
+  })
   return {
     outline: previous.outline,
     vector,
-    proof: composeProofSvg(vector.svg, previous.outline.svg),
+    proof,
     vectorPending: false,
   }
 }
@@ -166,5 +180,4 @@ export function revokeDualUrls(result: DualOutputResult | null) {
   URL.revokeObjectURL(result.outline.svgUrl)
   URL.revokeObjectURL(result.vector.svgUrl)
   revokeProof(result.proof)
-  revokeProof(result.final)
 }

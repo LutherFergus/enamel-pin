@@ -22,6 +22,8 @@ export type EnamelSettings = {
 export type PaletteColor = Rgb & {
   hex: string
   index: number
+  /** Share of opaque subject pixels after background removal (0–100). */
+  areaPercent?: number
   /** Nearest / assigned Pantone Solid Coated code, e.g. "185 C". */
   pmsCode?: string
   /** Display label e.g. "PMS 185 C". */
