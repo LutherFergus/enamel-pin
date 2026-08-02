@@ -496,10 +496,10 @@ export default function App() {
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={downloadProof}
+              onClick={downloadVector}
               disabled={!result || busy || !!result.vectorPending || result.vector.palette.length === 0}
             >
-              Download proof SVG
+              Download vector SVG
             </button>
             <button
               type="button"
@@ -520,10 +520,10 @@ export default function App() {
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={downloadVector}
+              onClick={downloadProof}
               disabled={!result || busy || !!result.vectorPending || result.vector.palette.length === 0}
             >
-              Download vector SVG
+              Download proof SVG
             </button>
             <button
               type="button"
@@ -555,7 +555,7 @@ export default function App() {
             </button>
             <p className="hint">
               For Sketchbook: use the PSD — File → Open. Layers bottom → top:
-              Original, Vector, Outline. Multipage TIFF is not Sketchbook’s
+              Outline, Vector, Original. Multipage TIFF is not Sketchbook’s
               native layered TIFF and usually won’t keep layers there.
             </p>
           </div>

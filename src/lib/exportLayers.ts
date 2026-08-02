@@ -62,7 +62,8 @@ async function buildTabCanvases(input: LayerExportInput): Promise<NamedCanvas[]>
     canvas: await rasterizeSvgToCanvas(result.outline.svg, tw, th),
   })
 
-  // PSD / TIFF stack: bottom → top = Original, Vector, Outline.
+  // Raster order for TIFF pages / PSD children source list:
+  // Original, Vector, Outline (PSD writes these top → bottom).
   return layers
 }
 
@@ -71,7 +72,7 @@ async function blobFromPsd(layers: NamedCanvas[]): Promise<Blob> {
   const width = layers[0].canvas.width
   const height = layers[0].canvas.height
 
-  // Composite preview (topmost non-empty wins via normal alpha).
+  // Composite matches PSD stack: Outline (bottom) → Vector → Original (top).
   const composite = document.createElement('canvas')
   composite.width = width
   composite.height = height
@@ -80,15 +81,16 @@ async function blobFromPsd(layers: NamedCanvas[]): Promise<Blob> {
   // fully transparent document background.
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, width, height)
-  for (const layer of layers) {
+  for (const layer of [...layers].reverse()) {
     ctx.drawImage(layer.canvas, 0, 0)
   }
 
   // ag-psd children are top → bottom in the Photoshop/Sketchbook panel.
-  // Build stack as Original (bottom), Vector, Outline (top) → reverse for write.
+  // layers are built Original → Vector → Outline; write that as top → bottom
+  // so Outline is the bottom layer and Original is on top.
   // Explicit bounds + 8-bit RGB for Sketchbook / Photoshop File → Open.
   // colorMode 3 = RGB (avoid importing ag-psd const enum under verbatimModuleSyntax).
-  const psdChildren = [...layers].reverse().map((layer) => ({
+  const psdChildren = layers.map((layer) => ({
     name: layer.name,
     canvas: layer.canvas,
     left: 0,

@@ -491,6 +491,12 @@ function extractInkMask(
     }
   }
 
+  // Color|color abutments (e.g. Bavarian white|blue lozenges) need metal walls
+  // even when no black stroke was drawn. Skip B&W line art and photo-like art.
+  if (!lineArt && !photoLike) {
+    addColorBoundaryContours(mask, data, width, height, 70)
+  }
+
   return { mask, lineArt, avgChroma, inkedCartoon }
 }
 
@@ -558,6 +564,48 @@ function addSilhouetteRing(
         }
       }
       if (border) mask[i] = 255
+    }
+  }
+}
+
+/**
+ * Paint metal walls wherever two opaque fill colors abut (white|blue diamonds,
+ * red|yellow stripes, etc.). Needed for inked cartoons that only drew outer
+ * black strokes and left flat color regions sharing an edge.
+ */
+function addColorBoundaryContours(
+  mask: Uint8Array,
+  data: Uint8ClampedArray,
+  w: number,
+  h: number,
+  minRgbDist: number,
+) {
+  const minDist2 = minRgbDist * minRgbDist
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x
+      const o = i * 4
+      if (data[o + 3] < 128) continue
+      const ch = chromaAt(data, o)
+      for (const [dx, dy] of [
+        [1, 0],
+        [0, 1],
+      ] as const) {
+        const nx = x + dx
+        const ny = y + dy
+        if (nx >= w || ny >= h) continue
+        const ni = ny * w + nx
+        const no = ni * 4
+        if (data[no + 3] < 128) continue
+        const dr = data[o] - data[no]
+        const dg = data[o + 1] - data[no + 1]
+        const db = data[o + 2] - data[no + 2]
+        if (dr * dr + dg * dg + db * db < minDist2) continue
+        // Ignore soft gray AA; require a real chromatic fill on at least one side.
+        if (ch < 12 && chromaAt(data, no) < 12) continue
+        mask[i] = 255
+        mask[ni] = 255
+      }
     }
   }
 }
