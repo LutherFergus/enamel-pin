@@ -416,7 +416,7 @@ export default function App() {
         </div>
         <p className="lede">
           Upload or generate artwork for soft enamel pins, then get transparent outline
-          SVG/PNG die-lines, a flat-color vector SVG, and a combined Proof SVG.
+          SVG die-lines, a flat-color vector SVG, and a combined Proof SVG.
         </p>
       </header>
 

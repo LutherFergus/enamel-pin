@@ -317,7 +317,7 @@ export function Preview({
         <div className="empty-state">
           <h3>Upload or generate</h3>
           <p>
-            You’ll get transparent outline SVG/PNG die-lines, a flat-color
+            You’ll get transparent outline SVG die-lines, a flat-color
             vector SVG, and a combined Proof SVG (vector + outline). Under
             Settings → Match my SVG, overlay your reference Outline/Vector to
             line up edges.
