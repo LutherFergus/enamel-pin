@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState, type CSSProperties } from 'react'
 import type { PaletteColor } from '../lib/types'
 import { PmsChartModal } from './PmsChartModal'
 
@@ -13,9 +13,32 @@ type Props = {
   disabled?: boolean
 }
 
+function formatPercent(p: number | undefined): string {
+  if (p == null || !Number.isFinite(p)) return '—'
+  if (p > 0 && p < 0.1) return '<0.1%'
+  if (p < 10) return `${p.toFixed(1)}%`
+  return `${Math.round(p)}%`
+}
+
+function bubbleSizePx(percent: number | undefined, maxPercent: number): number {
+  const p = Math.max(0, percent ?? 0)
+  const norm = maxPercent > 0 ? p / maxPercent : 0
+  // Vectorizer-style: dominant colors read larger; tiny fills stay tappable.
+  return Math.round(34 + Math.sqrt(norm) * 38)
+}
+
+function contrastInk(hex: string): string {
+  const cleaned = hex.replace('#', '')
+  if (cleaned.length < 6) return '#1c1915'
+  const r = Number.parseInt(cleaned.slice(0, 2), 16)
+  const g = Number.parseInt(cleaned.slice(2, 4), 16)
+  const b = Number.parseInt(cleaned.slice(4, 6), 16)
+  const L = 0.2126 * r + 0.7152 * g + 0.0722 * b
+  return L > 160 ? '#1c1915' : '#fffdf8'
+}
+
 /**
- * Merge colors, toggle fills on/off, and assign Pantone Solid Coated (PMS) codes.
- * Collapsed by default to keep the settings column compact.
+ * Vectorizer.AI-style color bubbles sized by subject area %, with PMS / merge.
  */
 export function PaletteMerge({
   palette,
@@ -26,13 +49,17 @@ export function PaletteMerge({
   onChangeDisabledColors,
   disabled,
 }: Props) {
-  const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState<number | null>(null)
   const [pickerFor, setPickerFor] = useState<number | null>(null)
-  const [mode, setMode] = useState<'merge' | 'pms'>('pms')
+  const [mode, setMode] = useState<'edit' | 'merge' | 'pms'>('edit')
 
   const disabledSet = new Set(disabledColors)
   const onCount = palette.filter((c) => !disabledSet.has(c.index)).length
+
+  const maxPercent = useMemo(
+    () => Math.max(1, ...palette.map((c) => c.areaPercent ?? 0)),
+    [palette],
+  )
 
   const find = (i: number): number => {
     let cur = i
@@ -47,13 +74,26 @@ export function PaletteMerge({
     return cur
   }
 
-  const onSwatch = (index: number) => {
+  const onBubble = (index: number) => {
     if (disabled) return
-    if (disabledSet.has(index)) return
+    const isOn = !disabledSet.has(index)
+
+    if (mode === 'edit') {
+      // Click toggles the fill on/off (Vectorizer-style remove color).
+      if (isOn && onCount <= 1) return
+      if (isOn) onChangeDisabledColors([...disabledColors, index])
+      else onChangeDisabledColors(disabledColors.filter((i) => i !== index))
+      if (selected === index) setSelected(null)
+      return
+    }
+
+    if (!isOn) return
+
     if (mode === 'pms') {
       setPickerFor(index)
       return
     }
+
     if (selected == null) {
       setSelected(index)
     } else if (selected === index) {
@@ -64,140 +104,112 @@ export function PaletteMerge({
     }
   }
 
-  const onToggle = (index: number, currentlyOn: boolean) => {
-    if (disabled) return
-    if (currentlyOn && onCount <= 1) return
-    if (currentlyOn) {
-      onChangeDisabledColors([...disabledColors, index])
-    } else {
-      onChangeDisabledColors(disabledColors.filter((i) => i !== index))
-    }
-    if (selected === index) setSelected(null)
-  }
-
   const effectiveColors = new Set(
     palette.filter((c) => !disabledSet.has(c.index)).map((c) => find(c.index)),
   ).size
 
+  const hint =
+    mode === 'edit'
+      ? 'Bubbles sized by subject area after background removal. Click to turn a color off/on.'
+      : mode === 'pms'
+        ? 'Click a bubble to assign a Pantone Solid Coated color.'
+        : selected == null
+          ? 'Click one on bubble, then another to merge them.'
+          : 'Click a second bubble to merge into the first.'
+
   return (
-    <div className={`palette-merge${open ? ' is-open' : ' is-collapsed'}`}>
-      <button
-        type="button"
-        className="palette-merge-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <h2>Palette / PMS</h2>
-        <span className="palette-merge-summary">
+    <div className="palette-merge">
+      <div className="palette-merge-head">
+        <h2>Palette</h2>
+        <div className="tabs tiny-tabs" role="tablist" aria-label="Palette mode">
+          <button
+            type="button"
+            className={`tab ${mode === 'edit' ? 'active' : ''}`}
+            onClick={() => {
+              setMode('edit')
+              setSelected(null)
+            }}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            className={`tab ${mode === 'pms' ? 'active' : ''}`}
+            onClick={() => {
+              setMode('pms')
+              setSelected(null)
+            }}
+          >
+            PMS
+          </button>
+          <button
+            type="button"
+            className={`tab ${mode === 'merge' ? 'active' : ''}`}
+            onClick={() => setMode('merge')}
+          >
+            Merge
+          </button>
+        </div>
+      </div>
+
+      <p className="hint">{hint}</p>
+
+      <div className="palette-bubbles" role="list">
+        {palette.map((c) => {
+          const isOn = !disabledSet.has(c.index)
+          const size = bubbleSizePx(c.areaPercent, maxPercent)
+          const ink = contrastInk(c.hex)
+          const lastOn = isOn && onCount <= 1 && mode === 'edit'
+          return (
+            <button
+              key={c.index}
+              type="button"
+              role="listitem"
+              className={`palette-bubble${selected === c.index ? ' selected' : ''}${
+                isOn ? '' : ' is-off'
+              }`}
+              style={
+                {
+                  '--bubble-size': `${size}px`,
+                  '--bubble-fill': c.hex,
+                  '--bubble-ink': ink,
+                } as CSSProperties
+              }
+              disabled={disabled || lastOn || (mode !== 'edit' && !isOn)}
+              aria-pressed={mode === 'edit' ? isOn : undefined}
+              aria-label={`${c.pmsName ?? c.hex}, ${formatPercent(c.areaPercent)}${
+                isOn ? '' : ', off'
+              }`}
+              title={
+                lastOn
+                  ? 'At least one color must stay on'
+                  : [
+                      c.pmsName ?? c.hex,
+                      formatPercent(c.areaPercent),
+                      c.hex,
+                      !isOn ? 'off' : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')
+              }
+              onClick={() => onBubble(c.index)}
+            >
+              <span className="palette-bubble-disk" aria-hidden />
+              <span className="palette-bubble-pct">{formatPercent(c.areaPercent)}</span>
+              {!isOn && <span className="palette-bubble-x" aria-hidden />}
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="palette-bubble-legend">
+        <span>
           {onCount}/{palette.length} on
           {merges.length > 0 ? ` · ${effectiveColors} after merge` : ''}
-          <span className="palette-merge-chevron" aria-hidden>
-            {open ? '▾' : '▸'}
-          </span>
         </span>
-      </button>
-
-      {open && (
-        <>
-          <div className="palette-merge-head">
-            <div className="tabs tiny-tabs" role="tablist">
-              <button
-                type="button"
-                className={`tab ${mode === 'pms' ? 'active' : ''}`}
-                onClick={() => {
-                  setMode('pms')
-                  setSelected(null)
-                }}
-              >
-                PMS
-              </button>
-              <button
-                type="button"
-                className={`tab ${mode === 'merge' ? 'active' : ''}`}
-                onClick={() => setMode('merge')}
-              >
-                Merge
-              </button>
-            </div>
-          </div>
-
-          <p className="hint">
-            Toggle a swatch off to fold its shapes into the nearest on color.
-            {mode === 'pms'
-              ? ' Click a swatch to pick a Pantone Solid Coated color.'
-              : selected == null
-                ? ' Click one on swatch, then another to combine them.'
-                : ' Click a second on swatch to merge into the first.'}
-          </p>
-
-          <div className="palette-list">
-            {palette.map((c) => {
-              const isOn = !disabledSet.has(c.index)
-              const lastOn = isOn && onCount <= 1
-              return (
-                <div
-                  key={c.index}
-                  className={`palette-row${selected === c.index ? ' selected' : ''}${
-                    isOn ? '' : ' is-off'
-                  }`}
-                >
-                  <button
-                    type="button"
-                    className={`palette-onoff${isOn ? ' is-on' : ''}`}
-                    disabled={disabled || lastOn}
-                    aria-pressed={isOn}
-                    aria-label={
-                      isOn
-                        ? `Turn off ${c.pmsName ?? c.hex}`
-                        : `Turn on ${c.pmsName ?? c.hex}`
-                    }
-                    title={
-                      lastOn
-                        ? 'At least one color must stay on'
-                        : isOn
-                          ? 'Turn off — shapes go to nearest on color'
-                          : 'Turn on'
-                    }
-                    onClick={() => onToggle(c.index, isOn)}
-                  >
-                    {isOn ? 'On' : 'Off'}
-                  </button>
-                  <button
-                    type="button"
-                    className="palette-row-main"
-                    disabled={disabled || !isOn}
-                    onClick={() => onSwatch(c.index)}
-                    title={
-                      !isOn
-                        ? 'Turn on to edit'
-                        : mode === 'pms'
-                          ? `Assign PMS for ${c.hex}`
-                          : `${c.hex} — click to merge`
-                    }
-                  >
-                    <span className="swatch" style={{ background: c.hex }} />
-                    <span className="palette-row-text">
-                      <strong>{c.pmsName ?? c.hex}</strong>
-                      <em>
-                        {c.hex}
-                        {c.pmsDeltaE != null && mode === 'pms'
-                          ? ` · ΔE ${c.pmsDeltaE}`
-                          : ''}
-                        {!isOn ? ' · off' : ''}
-                      </em>
-                    </span>
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-
-          {mode === 'merge' && merges.length > 0 && (
-            <div className="palette-merge-foot">
-              <p className="status">
-                {merges.length} merge{merges.length === 1 ? '' : 's'} · effective{' '}
-                {effectiveColors} colors
-              </p>
+        {(merges.length > 0 || disabledColors.length > 0) && (
+          <span className="palette-bubble-actions">
+            {merges.length > 0 && (
               <button
                 type="button"
                 className="linkish"
@@ -209,15 +221,8 @@ export function PaletteMerge({
               >
                 Reset merges
               </button>
-            </div>
-          )}
-
-          {disabledColors.length > 0 && (
-            <div className="palette-merge-foot">
-              <p className="status">
-                {disabledColors.length} color{disabledColors.length === 1 ? '' : 's'}{' '}
-                off
-              </p>
+            )}
+            {disabledColors.length > 0 && (
               <button
                 type="button"
                 className="linkish"
@@ -226,10 +231,29 @@ export function PaletteMerge({
               >
                 Turn all on
               </button>
-            </div>
-          )}
-        </>
-      )}
+            )}
+          </span>
+        )}
+      </div>
+
+      <ul className="palette-bubble-details">
+        {palette.map((c) => {
+          const isOn = !disabledSet.has(c.index)
+          return (
+            <li key={c.index} className={isOn ? undefined : 'is-off'}>
+              <span className="palette-detail-swatch" style={{ background: c.hex }} />
+              <span className="palette-detail-text">
+                <strong>{formatPercent(c.areaPercent)}</strong>
+                <em>
+                  {c.pmsName ?? c.hex}
+                  {c.pmsDeltaE != null ? ` · ΔE ${c.pmsDeltaE}` : ''}
+                  {!isOn ? ' · off' : ''}
+                </em>
+              </span>
+            </li>
+          )
+        })}
+      </ul>
 
       <PmsChartModal
         open={pickerFor != null}

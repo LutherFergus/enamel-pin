@@ -462,11 +462,17 @@ function resolvePaletteColors(
     }
   }
 
-  // Only return used colors in meta list order
+  // Only return used colors in meta list order, largest area first.
+  const totalArea = areas?.reduce((s, n) => s + n, 0) ?? 0
   const usedMeta = usedIndices
     .filter((i) => i >= 0 && i < meta.length)
-    .sort((a, b) => a - b)
-    .map((i) => meta[i])
+    .map((i) => {
+      const px = areas?.[i] ?? 0
+      const areaPercent =
+        totalArea > 0 ? Math.round((px / totalArea) * 1000) / 10 : 0
+      return { ...meta[i], areaPercent }
+    })
+    .sort((a, b) => (b.areaPercent ?? 0) - (a.areaPercent ?? 0) || a.index - b.index)
 
   return { fillRgb, meta: usedMeta }
 }
