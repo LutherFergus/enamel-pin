@@ -33,3 +33,15 @@ npm run preview
 ## PMS chart
 
 [`src/data/pms-enamel.json`](src/data/pms-enamel.json) holds ~150 Pantone Solid Coated approximations commonly used for soft enamel pin fills. Digital RGB/LAB only — always verify against a physical PMS book before production.
+
+## Mosaic Image Creator (sibling app)
+
+This repo also includes [`mosaic-image-creator/`](./mosaic-image-creator), a Next.js Grok Imagine app for mosaic-blanket-ready artwork (merged from the Mosaic Image Creator agent).
+
+```bash
+cd mosaic-image-creator
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000` and enter an xAI API key when prompted. See that folder’s README for options (colors, borders, background, preview prompt, gallery).
