@@ -183,7 +183,15 @@ export async function POST(request: Request) {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Generation failed.";
-    const status = message.includes("XAI_API_KEY") ? 401 : 502;
+    const lower = message.toLowerCase();
+    const status =
+      lower.includes("xai_api_key") ||
+      lower.includes("api key") ||
+      lower.includes("incorrect api key") ||
+      lower.includes("unauthorized")
+        ? 401
+        : 502;
+    console.error("[api/generate]", message);
     return NextResponse.json({ error: message }, { status });
   }
 }

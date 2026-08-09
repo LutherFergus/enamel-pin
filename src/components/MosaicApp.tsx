@@ -90,7 +90,10 @@ export function MosaicApp() {
           "Content-Type": "application/json",
           "x-xai-api-key": key,
         },
-        body: JSON.stringify(input),
+        body: JSON.stringify({
+          ...input,
+          apiKey: key,
+        }),
       });
 
       const payload = (await response.json()) as GenerateResponse & {
@@ -98,10 +101,14 @@ export function MosaicApp() {
       };
 
       if (!response.ok) {
-        if (response.status === 401) {
+        const message = payload.error || "Generation failed.";
+        if (
+          response.status === 401 ||
+          /api key|unauthorized|xai_api_key/i.test(message)
+        ) {
           setKeyModalOpen(true);
         }
-        throw new Error(payload.error || "Generation failed.");
+        throw new Error(message);
       }
 
       const rawDataUrl = toImageDataUrl(

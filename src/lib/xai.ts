@@ -12,8 +12,28 @@ type XaiImageResponse = {
     url?: string | null;
     mime_type?: string | null;
   }>;
-  error?: { message?: string };
+  error?: { message?: string } | string;
+  code?: string;
+  message?: string;
 };
+
+function extractXaiError(payload: XaiImageResponse, status: number): string {
+  if (typeof payload.error === "string" && payload.error.trim()) {
+    return payload.error.trim();
+  }
+  if (
+    payload.error &&
+    typeof payload.error === "object" &&
+    typeof payload.error.message === "string" &&
+    payload.error.message.trim()
+  ) {
+    return payload.error.message.trim();
+  }
+  if (typeof payload.message === "string" && payload.message.trim()) {
+    return payload.message.trim();
+  }
+  return `xAI request failed with status ${status}`;
+}
 
 export function resolveApiKey(provided?: string | null): string {
   const fromRequest = provided?.trim();
@@ -28,13 +48,17 @@ export function resolveApiKey(provided?: string | null): string {
 }
 
 async function parseXaiResponse(response: Response): Promise<XaiImageResult> {
-  const payload = (await response.json()) as XaiImageResponse;
+  let payload: XaiImageResponse;
+  try {
+    payload = (await response.json()) as XaiImageResponse;
+  } catch {
+    throw new Error(
+      `xAI returned a non-JSON response (status ${response.status}).`,
+    );
+  }
 
   if (!response.ok) {
-    const message =
-      payload.error?.message ||
-      `xAI request failed with status ${response.status}`;
-    throw new Error(message);
+    throw new Error(extractXaiError(payload, response.status));
   }
 
   const first = payload.data?.[0];
